@@ -73,7 +73,7 @@ All knobs are env vars (real env → `.env` → defaults). See `.env.example`.
 | `YT_DLP`                              | *(off)*                                   | Allow the yt-dlp YouTube search fallback for album art |
 | `SKIP_FOREVER`                        | *(off)*                                   | Auto-skip tracks skipped via Next 3+ times             |
 | `PREVIOUS_LOVE`                       | *(off)*                                   | Show a heart for tracks Previous-ed via 3+ times       |
-| `PLAYERCTL_PLAYER`                    | *(empty)*                                 | Harcode MPRIS player if needed                         |
+| `PLAYERCTL_PLAYER`                    | *(empty)*                                 | Hardcode MPRIS player if needed                        |
 
 ## HTTP API
 
@@ -90,7 +90,7 @@ I made this after plugging my amp to my raspberry pi, making it bluetooth receiv
 - **Skip / auto-skip** — pressing **Next** counts a skip for the current track in the `skips` table (always recorded). With `SKIP_FOREVER` enabled, any track skipped 3 or more times is auto-skipped (`playerctl next`) the next time it plays; auto-skipped tracks are logged to `history` (as `auto_skipped`) but never shown as the current track.
 - **Favourites / loved** — pressing **Previous** while a track is playing counts a favourite for that track in the `favourites` table (always recorded). With `PREVIOUS_LOVE` enabled, a track favoured 3 or more times is shown as **loved** with a heart icon on its Title row.
 
-## Deployment (Raspberry Pi, systemd user services)
+## Deployment (systemd user services)
 
 Units in `systemd/` (copy to `~/.config/systemd/user/`) after editing and replacing the placeholders:
 
