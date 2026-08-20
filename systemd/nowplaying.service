@@ -1,0 +1,18 @@
+# Replace {$HOME} placeholder with actual home folder
+# Replace {$PROJECTS} with parent location of nowplaying code
+
+[Unit]
+Description=Bluetooth Track Metadata Logger
+After=bluetooth.service
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/{$PROJECTS}/nowplaying
+ExecStart=/{$HOME}/.local/bin/uv run nowplaying
+Restart=always
+RestartSec=3
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=default.target

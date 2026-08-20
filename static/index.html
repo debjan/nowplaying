@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Now Playing</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" href="style.css">
+    <link rel="icon" type="image/svg+xml" href="favicon">
+    <script>
+        (function () {
+            const saved = localStorage.getItem('theme');
+            if (saved) {
+                const link = document.createElement('link');
+                link.rel = 'stylesheet';
+                link.href = `themes/${saved}.css`;
+                link.id = 'theme-override';
+                document.head.appendChild(link);
+            }
+        })();
+    </script>
+</head>
+<body>
+    <div class="card">
+        <div class="header-container">
+            <h1>Now Playing</h1>
+            <div class="theme">
+                <div class="theme-picker">
+                    <button type="button" id="theme-btn" class="theme-btn" aria-haspopup="listbox" aria-expanded="false" title="Theme">
+                        <span id="theme-dot" class="theme-dot">⬤</span>
+                    </button>
+                    <ul id="theme-menu" class="theme-menu" role="listbox" hidden></ul>
+                </div>
+            </div>
+        </div>
+        <div class="cover">
+            <img id="art" class="art" alt="Album art" src="cover.svg">
+        </div>
+        <div class="track">
+            <div id="track" class="track-text">Loading...</div>
+        </div>
+        <svg class="icon-stroke" xmlns="http://www.w3.org/2000/svg" width="0" height="0" style="display:none">
+            <symbol id="icon-user" width="24" height="24" viewBox="0 0 256 256"><rect width="256" height="256" stroke="none"/>
+                <circle cx="128" cy="96" r="64" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/>
+                <path d="M32,216c19.37-33.47,54.55-56,96-56s76.63,22.53,96,56" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/>
+            </symbol>
+            <symbol id="icon-disc" width="24" height="24" viewBox="0 0 256 256"><rect width="256" height="256" stroke="none"/>
+                <circle cx="128" cy="128" r="96" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/>
+                <path d="M64,128a64,64,0,0,1,64-64" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/>
+                <path d="M192,128a64,64,0,0,1-64,64" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/>
+                <circle cx="128" cy="128" r="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/>
+            </symbol>
+            <symbol id="icon-review" width="24" height="24" viewBox="0 0 256 256">
+                <path d="M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24ZM72,128a8,8,0,0,1-16,0,72.08,72.08,0,0,1,72-72,8,8,0,0,1,0,16A56.06,56.06,0,0,0,72,128Zm32,0a24,24,0,1,1,24,24A24,24,0,0,1,104,128Zm24,72a8,8,0,0,1,0-16,56.06,56.06,0,0,0,56-56,8,8,0,0,1,16,0A72.08,72.08,0,0,1,128,200Z"/>
+            </symbol>
+            <symbol id="icon-note" width="24" height="24" viewBox="0 0 256 256"><rect width="256" height="256" stroke="none"/>
+                <circle cx="180" cy="164" r="28" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/>
+                <circle cx="52" cy="196" r="28" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/>
+                <line x1="208" y1="72" x2="80" y2="104" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/>
+                <polyline points="80 196 80 56 208 24 208 164" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/>
+            </symbol>
+            <symbol id="icon-love" width="24" height="24" viewBox="0 0 256 256"><rect width="256" height="256" fill="none" stroke="none"/>
+                <path d="M240,102c0,70-103.79,126.66-108.21,129a8,8,0,0,1-7.58,0C119.79,228.66,16,172,16,102A62.07,62.07,0,0,1,78,40c20.65,0,38.73,8.88,50,23.89C139.27,48.88,157.35,40,178,40A62.07,62.07,0,0,1,240,102Z"/>
+            </symbol>
+        </svg>
+        <div class="spacer"></div>
+        <div class="progress" id="progress" hidden><div class="progress-fill" id="progress-fill"></div></div>
+        <div class="controls">
+            <button class="btn" data-action="previous" title="Previous">
+                <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 256 256">
+                    <rect width="256" height="256"/>
+                    <path d="M208,47.88V208.12a16,16,0,0,1-24.43,13.43L64,146.77V216a8,8,0,0,1-16,0V40a8,8,0,0,1,16,0v69.23L183.57,34.45A15.95,15.95,0,0,1,208,47.88Z"/>
+                </svg>
+            </button>
+            <button class="btn btn-play" data-action="play-pause" title="Play / Pause">
+                <svg class="icon-play" xmlns="http://www.w3.org/2000/svg" width="80" height="80" viewBox="0 0 256 256">
+                    <rect width="256" height="256"/>
+                    <path d="M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm40.55,110.58-52,36A8,8,0,0,1,104,164V92a8,8,0,0,1,12.55-6.58l52,36a8,8,0,0,1,0,13.16Z"/>
+                </svg>
+                <svg class="icon-pause" xmlns="http://www.w3.org/2000/svg" width="80" height="80" viewBox="0 0 256 256">
+                    <rect width="256" height="256"/>
+                    <path d="M128,24A104,104,0,1,0,232,128,104.13,104.13,0,0,0,128,24ZM112,160a8,8,0,0,1-16,0V96a8,8,0,0,1,16,0Zm48,0a8,8,0,0,1-16,0V96a8,8,0,0,1,16,0Z"/>
+                </svg>
+            </button>
+            <button class="btn" data-action="next" title="Next">
+                <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 256 256">
+                    <rect width="256" height="256"/>
+                    <path d="M208,40V216a8,8,0,0,1-16,0V146.77L72.43,221.55A15.95,15.95,0,0,1,48,208.12V47.88A15.95,15.95,0,0,1,72.43,34.45L192,109.23V40a8,8,0,0,1,16,0Z"/>
+            </button>
+        </div>
+    </div>
+    <div id="review-popup" class="review-popup" hidden>
+        <div class="review-popup-card" role="dialog" aria-modal="true" aria-labelledby="review-title">
+            <div class="review-popup-header">
+                <span id="review-title" class="review-popup-title"></span>
+                <button type="button" id="review-close" class="review-close" aria-label="Close">✕</button>
+            </div>
+            <div id="review-body" class="review-popup-body"></div>
+        </div>
+    </div>
+    <script>
+        window.addEventListener('DOMContentLoaded', () => {
+            const trackEl = document.getElementById('track');
+            const artEl = document.getElementById('art');
+            const themeBtn = document.getElementById('theme-btn');
+            const themeDot = document.getElementById('theme-dot');
+            const themeMenu = document.getElementById('theme-menu');
+            const source = new EventSource('/api/track/stream');
+
+            // Restore the saved theme; default to mocha.
+            const savedTheme = localStorage.getItem('theme') || 'catppuccin-mocha';
+
+            function themeLabel(name) {
+                return name
+                    .split('-')
+                    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+                    .join(' ');
+            }
+
+            function applyTheme(name) {
+                let link = document.getElementById('theme-override');
+                if (!link) {
+                    link = document.createElement('link');
+                    link.rel = 'stylesheet';
+                    link.id = 'theme-override';
+                    document.head.appendChild(link);
+                }
+                link.href = `themes/${name}.css`;
+                localStorage.setItem('theme', name);
+            }
+
+            function closeMenu() {
+                themeMenu.hidden = true;
+                themeBtn.setAttribute('aria-expanded', 'false');
+            }
+
+            function toggleMenu() {
+                themeMenu.hidden = !themeMenu.hidden;
+                themeBtn.setAttribute('aria-expanded', String(!themeMenu.hidden));
+            }
+
+            function selectTheme(name, accent) {
+                applyTheme(name);
+                themeDot.style.color = accent || 'var(--accent-color)';
+                themeBtn.title = themeLabel(name);
+                themeMenu.querySelectorAll('li').forEach((li) => {
+                    li.classList.toggle('selected', li.dataset.theme === name);
+                });
+            }
+
+            async function loadThemes() {
+                try {
+                    const res = await fetch('/api/themes');
+                    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                    const themes = await res.json();
+                    if (!Array.isArray(themes)) throw new Error('Unexpected response');
+                    const accents = new Map();
+                    themeMenu.innerHTML = '';
+                    for (const item of themes) {
+                        const name = typeof item === 'string' ? item : item && item.name;
+                        if (!name) continue;
+                        const accent = (item && item.accent) || null;
+                        accents.set(name, accent);
+                        const li = document.createElement('li');
+                        li.dataset.theme = name;
+                        li.role = 'option';
+                        const dot = document.createElement('span');
+                        dot.className = 'menu-dot';
+                        dot.textContent = '⬤';
+                        dot.style.color = accent || 'var(--accent-color)';
+                        const label = document.createElement('span');
+                        label.textContent = themeLabel(name);
+                        li.append(dot, label);
+                        li.addEventListener('click', () => {
+                            selectTheme(name, accent);
+                            closeMenu();
+                        });
+                        themeMenu.appendChild(li);
+                    }
+                    selectTheme(savedTheme, accents.get(savedTheme) || null);
+                } catch (err) {
+                    console.error('Failed to load themes:', err);
+                    themeBtn.disabled = true;
+                }
+            }
+
+            loadThemes();
+
+            themeBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                toggleMenu();
+            });
+
+            document.addEventListener('click', (e) => {
+                if (!themeBtn.closest('.theme-picker').contains(e.target)) {
+                    closeMenu();
+                }
+            });
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') closeMenu();
+            });
+
+            function add_span(el) {
+                const span = document.createElement('span')
+                span.className = 'centered';
+                span.textContent = 'No metadata available';
+                el.append(span);
+            }
+
+            source.onmessage = (event) => {
+                let data;
+                try {
+                    data = JSON.parse(event.data);
+                } catch {
+                    data = null;
+                }
+                if (!data || data.error) {
+                    if (data && data.error) {
+                        trackEl.innerHTML = data.error;
+                    } else {
+                        add_span(trackEl);
+                    }
+                    artEl.src = 'cover.svg';
+                    return;
+                }
+                const id = data.TrackId;
+                if (id !== lastTrackId) {
+                    if (lastTrackId === null) {
+                        progressActive = false;
+                    } else {
+                        progressActive = true;
+                        positionMs = 0;
+                        lastTickTs = Date.now();
+                    }
+                    lastTrackId = id;
+                }
+                durationMs = Number(data.Duration) || 0;
+                const rows = [
+                    ['icon-user', data.Artist, false, null],
+                    ...(data.Album && data.Album !== data.Title
+                        ? [[data.Review ? 'icon-review' : 'icon-disc', data.Album, false, data.Review]]
+                        : []),
+                    [data.Loved ? 'icon-love' : 'icon-note', data.Title, data.Loved, null],
+                ];
+                trackEl.innerHTML = '';
+                rows.forEach(([iconId, text, loved, review]) => {
+                    const row = document.createElement('div');
+                    row.className = 'track-row';
+                    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+                    svg.classList.add('track-icon');
+                    if (loved) svg.classList.add('heart');
+                    if (review) svg.classList.add('review');
+                    const use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+                    use.setAttribute('href', `#${iconId}`);
+                    svg.appendChild(use);
+                    const value = document.createElement('span');
+                    value.textContent = text;
+                    row.append(svg, value);
+                    if (review) {
+                        row.classList.add('has-review');
+                        row.title = 'Read the album review';
+                        row.addEventListener('click', (e) => {
+                            e.stopPropagation();
+                            openReview(review, `${data.Artist} - ${data.Album}`);
+                        });
+                    }
+                    trackEl.appendChild(row);
+                });
+                artEl.src = data['Album Art'] || 'cover.svg';
+            };
+
+            artEl.onerror = () => {
+                if (artEl.src !== new URL('cover.svg', location.href).href) {
+                    artEl.src = 'cover.svg';
+                }
+            };
+
+            source.onerror = () => {
+                if (!trackEl.innerText || trackEl.innerText === 'Loading...') {
+                    trackEl.innerText = ''
+                    add_span(trackEl);
+                }
+            };
+        });
+
+        const playBtn = document.querySelector('.btn-play');
+
+        let durationMs = 0;
+        let positionMs = 0;
+        let lastTickTs = Date.now();
+        let lastTrackId = null;
+        let progressActive = false;
+
+        function updateProgress() {
+            const bar = document.getElementById('progress');
+            const fill = document.getElementById('progress-fill');
+            if (!durationMs) {
+                bar.hidden = true;
+                return;
+            }
+            bar.hidden = false;
+            const now = Date.now();
+            if (progressActive && playBtn.classList.contains('playing')) {
+                positionMs += now - lastTickTs;
+            }
+            lastTickTs = now;
+            if (positionMs / durationMs >= 1) {
+                positionMs = 0;
+            }
+            fill.style.width = (Math.min(1, positionMs / durationMs) * 100).toFixed(2) + '%';
+        }
+
+        async function sendControl(action) {
+            if (action === 'play-pause') {
+                playBtn.classList.toggle('playing');
+            }
+            if (action === 'previous') {
+                positionMs = 0;
+                lastTickTs = Date.now();
+                progressActive = true;
+            }
+            try {
+                await fetch(`/api/player/${action}`, { method: 'POST' });
+            } catch {
+                // ignore; playback state is reconciled by the next poll
+            }
+        }
+
+        async function refreshPlayback() {
+            try {
+                const res = await fetch('/api/player/status');
+                if (!res.ok) {
+                    playBtn.classList.remove('playing');
+                    return;
+                }
+                const data = await res.json().catch(() => ({}));
+                playBtn.classList.toggle('playing', data.status === 'Playing');
+            } catch {
+                playBtn.classList.remove('playing');
+            }
+        }
+
+        document.querySelectorAll('.btn').forEach((btn) => {
+            btn.addEventListener('click', () => sendControl(btn.dataset.action));
+        });
+
+        refreshPlayback();
+        setInterval(refreshPlayback, 3000);
+        setInterval(updateProgress, 1000);
+
+        // --- Album review popup ------------------------------------------
+        function renderMarkdown(text) {
+            const esc = (s) =>
+                s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            const inline = (s) =>
+                s
+                    .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_m, label, url) => {
+                        let u;
+                        try {
+                            u = new URL(url, location.href);
+                        } catch {
+                            return label;
+                        }
+                        if (u.protocol !== 'http:' && u.protocol !== 'https:') return label;
+                        return `<a href="${u.href}" target="_blank" rel="noreferrer noopener">${label}</a>`;
+                    })
+                    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+                    .replace(/\*([^*]+)\*/g, '<em>$1</em>')
+                    .replace(/`([^`]+)`/g, '<code>$1</code>');
+            const out = [];
+            let inList = false;
+            let inQuote = false;
+            const flush = () => {
+                if (inList) { out.push('</ul>'); inList = false; }
+                if (inQuote) { out.push('</blockquote>'); inQuote = false; }
+            };
+            for (const raw of text.split('\n')) {
+                const line = raw.trim();
+                if (!line) { flush(); continue; }
+                const h1 = line.match(/^###\s+(.*)$/);
+                const h2 = line.match(/^##\s+(.*)$/);
+                const h3 = line.match(/^#\s+(.*)$/);
+                if (h1 || h2 || h3) {
+                    flush();
+                    const tag = h1 ? 'h3' : h2 ? 'h4' : 'h5';
+                    out.push(`<${tag}>${inline(esc((h1 || h2 || h3)[1]))}</${tag}>`);
+                    continue;
+                }
+                if (line.startsWith('- ')) {
+                    if (!inList) { out.push('<ul>'); inList = true; }
+                    out.push(`<li>${inline(esc(line.slice(2)))}</li>`);
+                    continue;
+                }
+                if (line.startsWith('> ')) {
+                    if (!inQuote) { out.push('<blockquote>'); inQuote = true; }
+                    out.push(`<p>${inline(esc(line.slice(2)))}</p>`);
+                    continue;
+                }
+                flush();
+                out.push(`<p>${inline(esc(line))}</p>`);
+            }
+            flush();
+            return out.join('\n');
+        }
+
+        const popup = document.getElementById('review-popup');
+        const popupTitle = document.getElementById('review-title');
+        const popupBody = document.getElementById('review-body');
+        const popupClose = document.getElementById('review-close');
+
+        function openReview(review, title) {
+            popupTitle.textContent = title;
+            popupBody.innerHTML = renderMarkdown(review);
+            popup.hidden = false;
+            document.body.classList.add('no-scroll');
+        }
+
+        function closeReview() {
+            popup.hidden = true;
+            popupBody.innerHTML = '';
+            document.body.classList.remove('no-scroll');
+        }
+
+        popupClose.addEventListener('click', closeReview);
+        popup.addEventListener('click', (e) => {
+            if (e.target === popup) closeReview();
+        });
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && !popup.hidden) closeReview();
+        });
+    </script>
+</body>
+</html>

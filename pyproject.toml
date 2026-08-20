@@ -1,0 +1,30 @@
+[project]
+name = "nowplaying"
+version = "0.1.0"
+description = "Bluetooth now-playing dashboard with live server-sent-event updates"
+readme = "README.md"
+authors = [
+    { name = "debjan" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "aiofiles>=25.1.0",
+    "aiosqlite>=0.20.0",
+    "dbus-next>=0.2.3",
+    "fastapi>=0.141.1",
+    "httpx>=0.28.1",
+    "loguru>=0.7.3",
+    "pillow>=12.3.0",
+    "python-dotenv>=1.0.0",
+    "uvicorn>=0.52.1",
+]
+
+[project.scripts]
+nowplaying = "nowplaying.monitor:main"
+
+[build-system]
+requires = ["uv_build>=0.12.2,<0.13.0"]
+build-backend = "uv_build"
+
+[tool.ruff.lint]
+ignore = ["S", "DTZ", 'BLE001', "SIM"]

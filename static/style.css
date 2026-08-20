@@ -1,0 +1,430 @@
+@import "themes/catppuccin-mocha.css";
+
+:root {
+    --foreground-color: var(--foreground, #EBDBB2);
+    --background-color: var(--background, #1D2021);
+    --shadow-color: var(--shadow, #3C3836);
+    --accent-color: var(--accent, #B8BB26);
+}
+
+body {
+    font-family: system-ui, -apple-system, sans-serif;
+    background: var(--background-color);
+    color: var(--foreground-color);
+    display: flex;
+    height: 100dvh;
+    align-items: center;
+    justify-content: center;
+    margin: 0;
+}
+
+.card {
+    display: flex;
+    flex-direction: column;
+    height: calc(100dvh - 2rem);
+    margin: 1rem;
+    border: 1px solid var(--shadow-color);
+    background: color-mix(in srgb, var(--background-color), var(--foreground-color) 5%);
+    padding: 1rem 2rem;
+    border-radius: 12px;
+    width: 460px;
+    max-width: calc(100vw - 2rem);
+    box-sizing: border-box;
+}
+
+h1 {
+    font-size: 1.2rem;
+    color: var(--accent-color);
+    margin-top: 0;
+    margin-bottom: 0;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    flex-shrink: 0;
+}
+
+.track-text {
+    font-size: 1.1rem;
+    line-height: 2.6;
+    margin: 0;
+    flex: 1;
+    min-width: 0;
+    width: max-content;
+    max-width: 100%;
+    overflow-x: auto;
+    overflow-y: auto;
+    padding-right: 0.5rem;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+}
+
+.track-text::-webkit-scrollbar {
+    display: none;
+}
+
+.track-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.track-icon {
+    width: 1.4rem;
+    height: 1.4rem;
+    flex-shrink: 0;
+    color: var(--foreground-color);
+    stroke: color-mix(in srgb, var(--accent-color), var(--background-color) 65%);
+}
+
+.track-icon:not(.review) {
+    fill: none;
+}
+
+.track-icon:hover {
+    stroke: var(--foreground-color);
+}
+
+.track-icon.heart {
+    stroke: none;
+    fill: var(--accent-color);
+}
+
+.track-icon.heart:hover {
+    fill: #CC241D;
+}
+
+.track-icon.review {
+    fill: var(--accent-color);
+}
+
+.track-icon.review:hover {
+    fill: var(--foreground-color);
+}
+
+.track-row span {
+    white-space: nowrap;
+    padding-left: 1rem;
+}
+
+.track-row.has-review {
+    cursor: pointer;
+    border-radius: 6px;
+    transition: background 0.1s ease;
+}
+
+@media (hover: hover) {
+    .track-row.has-review:hover {
+        background: color-mix(in srgb, var(--background-color), var(--foreground-color) 8%);
+    }
+}
+
+.track-row.has-review .track-icon:hover {
+    stroke: none;
+}
+
+body.no-scroll {
+    overflow: hidden;
+}
+
+.review-popup {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.55);
+    padding: 1rem;
+}
+
+.review-popup[hidden] {
+    display: none;
+}
+
+.review-popup-card {
+    background: var(--background-color);
+    border: 1px solid var(--shadow-color);
+    border-radius: 12px;
+    width: 620px;
+    max-width: 100%;
+    max-height: 85vh;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
+}
+
+.review-popup-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 1rem 1.25rem;
+    border-bottom: 1px solid var(--shadow-color);
+}
+
+.review-popup-title {
+    font-weight: 700;
+    color: var(--accent-color);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.review-close {
+    background: none;
+    border: none;
+    color: var(--foreground-color);
+    font-size: 1.1rem;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0.25rem 0.5rem;
+    border-radius: 6px;
+    flex-shrink: 0;
+}
+
+@media (hover: hover) {
+    .review-close:hover {
+        color: var(--accent-color);
+    }
+}
+
+.review-popup-body {
+    padding: 1.25rem;
+    overflow-y: auto;
+    font-size: 1rem;
+    line-height: 1.7;
+}
+
+.review-popup-body h3,
+.review-popup-body h4,
+.review-popup-body h5 {
+    margin: 0.75rem 0 0.25rem;
+}
+
+.review-popup-body p {
+    margin: 0 0 0.75rem;
+}
+
+.review-popup-body ul {
+    margin: 0 0 0.75rem;
+    padding-left: 1.5rem;
+}
+
+.review-popup-body blockquote {
+    margin: 0 0 0.75rem;
+    padding-left: 1rem;
+    border-left: 3px solid var(--accent-color);
+    color: color-mix(in srgb, var(--foreground-color), var(--background-color) 25%);
+}
+
+.review-popup-body code {
+    font-family: ui-monospace, monospace;
+    background: color-mix(in srgb, var(--background-color), var(--foreground-color) 10%);
+    padding: 0 0.3rem;
+    border-radius: 4px;
+}
+
+.review-popup-body a {
+    color: var(--accent-color);
+}
+
+.track-row:last-of-type {
+    font-weight: 700;
+}
+
+.track {
+    margin-top: 2.5rem;
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    min-height: 0;
+    flex-shrink: 1;
+}
+
+.cover {
+    margin-top: 2.5rem;
+    display: flex;
+    justify-content: center;
+    min-height: 0;
+    overflow: hidden;
+    flex-shrink: 1;
+}
+
+.cover > img {
+    border: 1px solid var(--shadow-color);
+}
+
+.art {
+    border-radius: 12px;
+    object-fit: cover;
+    flex-shrink: 0;
+    max-width: 100%;
+    max-height: 60vh;
+    height: auto;
+    width: auto;
+}
+
+.spacer {
+    flex-grow: 1;
+    flex-shrink: 0;
+}
+
+.controls {
+    display: flex;
+    justify-content: space-around;
+    align-items: center;
+    margin-top: 1rem;
+    flex-shrink: 0;
+}
+
+.controls path {
+    fill: currentColor;
+}
+
+.controls rect {
+    fill: none;
+}
+
+.btn {
+    background: none;
+    border: none;
+    color: var(--foreground-color);
+    font-size: 1.6rem;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0.5rem 0.9rem;
+    transition: transform 0.1s ease, color 0.1s ease;
+}
+
+@media (hover: hover) {
+    .btn:hover {
+        color: var(--accent-color);
+    }
+}
+
+.btn:active {
+    transform: scale(0.85);
+}
+
+.btn-play {
+    font-size: 2.2rem;
+    color: color-mix(in srgb, var(--accent-color), var(--background-color) 20%);
+}
+
+.btn-play:not(.playing) {
+    color: var(--foreground-color);
+}
+
+.btn-play:not(.playing) .icon-pause,
+.btn-play.playing .icon-play {
+    display: none;
+}
+
+@media (hover: hover) {
+    .btn-play:hover {
+        color: var(--accent-color);
+    }
+}
+
+.progress {
+    margin-top: 1rem;
+    margin-bottom: 1rem;
+    height: 1px;
+    background: var(--shadow-color);
+    overflow: hidden;
+    width: 100%;
+    flex-shrink: 0;
+}
+
+.progress-fill {
+    height: 100%;
+    width: 0;
+    background: var(--accent-color);
+    transition: width 0.8s linear;
+}
+
+span.centered {
+    display: block;
+    width: max-content;
+    margin: 0 auto;
+}
+
+.header-container {
+    display: flex;
+    justify-content: space-between;
+}
+
+.theme {
+    display: flex;
+    align-items: center;
+}
+
+.theme-picker {
+    position: relative;
+}
+
+.theme-btn {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    background: transparent;
+    color: var(--foreground-color);
+    border: 1px solid var(--shadow-color);
+    border-radius: 6px;
+    padding: 0.15rem 0.35rem;
+    font-family: inherit;
+    font-size: 1rem;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.theme-btn:hover,
+.theme-btn:focus-visible {
+    border-color: var(--accent-color);
+    outline: none;
+}
+
+.theme-dot {
+    font-size: 0.9rem;
+    line-height: 1;
+}
+
+.theme-menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    z-index: 10;
+    list-style: none;
+    margin: 0;
+    padding: 0.25rem;
+    min-width: 9rem;
+    background: var(--background-color);
+    border: 1px solid var(--shadow-color);
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+}
+
+.theme-menu li {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.3rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.85rem;
+    color: var(--foreground-color);
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.theme-menu li:hover {
+    background: color-mix(in srgb, var(--background-color), var(--foreground-color) 10%);
+}
+
+.theme-menu li.selected {
+    font-weight: 700;
+}
+
+.menu-dot {
+    font-size: 0.7rem;
+    line-height: 1;
+    flex-shrink: 0;
+}
