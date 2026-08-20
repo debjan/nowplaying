@@ -81,7 +81,7 @@ Swagger UI at `http://<device-ip>:<port>/docs`
 
 ## Use cases
 
-I made this after plugging my amp to my raspberry pi, making it bluetooth reciver while wanted access and control from any device in my LAN
+I made this after plugging my amp to my raspberry pi, making it bluetooth receiver while wanted access and control from any device in my LAN
 
 - **Smart home / wall-mounted dashboard** — show what's playing on a shared Bluetooth speaker or Hi-Fi in a living room, office, updating live.
 - **Home theater / music room display** — a tiny screen showing track, artist, and album art while audio streams over Bluetooth A2DP.
