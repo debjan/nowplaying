@@ -51,7 +51,7 @@ flowchart LR
 ```bash
 # 1. Set up (Python >= 3.11, uv)
 uv sync
-cp .env.example .env   # optional overrides only; MusicBrainz needs no key
+cp .env.example .env   # optional overrides only
 
 # 2. Run the monitor (producer):
 uv run nowplaying
@@ -77,7 +77,7 @@ All knobs are env vars (real env → `.env` → defaults). See `.env.example`.
 
 ## HTTP API
 
-Swagger UI at `http://<`device-ip`>:<port>/docs`
+Swagger UI at `http://<device-ip>:<port>/docs`
 
 ## Use cases
 
