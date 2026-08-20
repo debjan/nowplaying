@@ -99,5 +99,3 @@ cp systemd/nowplaying.service systemd/nowplaying-web.service ~/.config/systemd/u
 systemctl --user daemon-reload
 systemctl --user enable --now nowplaying nowplaying-web
 ```
-
-`#dashboard #bluetooth #mpris`
