@@ -38,7 +38,7 @@ flowchart LR
 ```
 
 - **Monitor** (`nowplaying` command): connects to the system D-Bus via `dbus-next` and subscribes to `org.bluez.MediaPlayer1` `PropertiesChanged`. BlueZ carries the metadata in a nested `Track` dict (`Title`/`Artist`/`Album`/`Duration`), which the monitor reads directly from the signal or fetches via `Properties.Get` when invalidated. It captures the track and writes it to the shared database (`artists` / `albums` / `tracks` upserts plus a `history` row per change). It also resolves the album on MusicBrainz (falling back to a yt-dlp YouTube search), downloads the album art and stores the served cover URL in the DB.
-- **Web server** (`uvicorn nowplaying.web:app`): FastAPI app that serves the dashboard page, the current track as JSON (latest `history` row), a Server-Sent Events stream that pushes the track the moment it changes (plus a heartbeat to keep idle connections alive), and the album-art file.
+- **Web server** (`uvicorn nowplaying.web:app`): FastAPI app that serves the dashboard page, a Server-Sent Events stream that pushes the track the moment it changes (plus a heartbeat to keep idle connections alive), and the album-art file.
 
 ## Requirements
 
@@ -92,7 +92,7 @@ I made this after plugging my amp to my raspberry pi, making it bluetooth receiv
 
 ## Deployment (systemd user services)
 
-Units in `systemd/` (copy to `~/.config/systemd/user/`) after editing and replacing the placeholders:
+Units in `systemd/` - copy to `~/.config/systemd/user/` after editing and replacing the placeholders:
 
 ```bash
 cp systemd/nowplaying.service systemd/nowplaying-web.service ~/.config/systemd/user/

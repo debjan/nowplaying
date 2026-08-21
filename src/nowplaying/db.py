@@ -24,11 +24,12 @@ CREATE TABLE IF NOT EXISTS albums (
 );
 
 CREATE TABLE IF NOT EXISTS tracks (
-  id        INTEGER PRIMARY KEY AUTOINCREMENT,
-  title     TEXT,
-  album_id  INTEGER REFERENCES albums(id),
-  artist_id INTEGER NOT NULL REFERENCES artists(id),
-  duration  INTEGER
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  title       TEXT,
+  album_id    INTEGER REFERENCES albums(id),
+  artist_id   INTEGER NOT NULL REFERENCES artists(id),
+  duration    INTEGER,
+  description TEXT
 );
 
 CREATE TABLE IF NOT EXISTS favourites (
@@ -63,7 +64,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_tracks_title_album_artist
 
 # This is the single place a schema evolution is expressed — there is no
 # separate versioned migration list.
-_EXTRA_COLUMNS: dict[str, dict[str, str]] = {}
+_EXTRA_COLUMNS: dict[str, dict[str, str]] = {
+    'tracks': {'description': 'TEXT'},
+}
 
 
 def connect(path: str) -> sqlite3.Connection:
@@ -84,6 +87,17 @@ def _ensure_columns(conn: sqlite3.Connection) -> None:
         for name, ddl in columns.items():
             if name not in existing:
                 conn.execute(f'ALTER TABLE {table} ADD COLUMN {name} {ddl}')
+
+
+async def _ensure_columns_async(conn: aiosqlite.Connection) -> None:
+    """Async twin of `_ensure_columns` for the web server's connections."""
+
+    for table, columns in _EXTRA_COLUMNS.items():
+        cur = await conn.execute(f'PRAGMA table_info({table})')
+        existing = {row[1] for row in await cur.fetchall()}
+        for name, ddl in columns.items():
+            if name not in existing:
+                await conn.execute(f'ALTER TABLE {table} ADD COLUMN {name} {ddl}')
 
 
 def _prepare(conn: sqlite3.Connection, attempts: int = 15) -> None:
@@ -111,6 +125,7 @@ async def _prepare_async(
         try:
             await conn.execute('PRAGMA journal_mode = WAL')
             await conn.executescript(SCHEMA)
+            await _ensure_columns_async(conn)
             return
         except sqlite3.OperationalError as exc:
             if 'locked' not in str(exc).lower() or attempt == attempts - 1:
@@ -133,6 +148,7 @@ def resolve_track(
     duration: int | None = None,
     release_group_id: str | None = None,
     review: str | None = None,
+    description: str | None = None,
 ) -> int:
     """Upsert artist/album/track and return the stable `track_id` (no commit)."""
 
@@ -171,8 +187,8 @@ def resolve_track(
         ).fetchone()
         if existing:
             conn.execute(
-                'UPDATE tracks SET duration = ? WHERE id = ?',
-                (duration, existing[0]),
+                'UPDATE tracks SET duration = ?, description = COALESCE(?, description) WHERE id = ?',
+                (duration, description, existing[0]),
             )
             _fold_placeholder(conn, title, artist_id, existing[0])
             return existing[0]
@@ -184,19 +200,20 @@ def resolve_track(
         ).fetchone()
         if row:
             conn.execute(
-                'UPDATE tracks SET album_id = ?, duration = ? WHERE id = ?',
-                (album_id, duration, row[0]),
+                'UPDATE tracks SET album_id = ?, duration = ?, description = COALESCE(?, description) WHERE id = ?',
+                (album_id, duration, description, row[0]),
             )
             return row[0]
 
         conn.execute(
             """
-            INSERT INTO tracks(title, album_id, artist_id, duration)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO tracks(title, album_id, artist_id, duration, description)
+            VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(title, album_id, artist_id) DO UPDATE SET
-                duration = excluded.duration
+                duration    = excluded.duration,
+                description = COALESCE(excluded.description, tracks.description)
             """,
-            (title, album_id, artist_id, duration),
+            (title, album_id, artist_id, duration, description),
         )
         track_id = conn.execute(
             'SELECT id FROM tracks WHERE title = ? AND album_id = ? AND artist_id = ?',
@@ -211,14 +228,14 @@ def resolve_track(
         ).fetchone()
         if row:
             conn.execute(
-                'UPDATE tracks SET duration = ? WHERE id = ?',
-                (duration, row[0]),
+                'UPDATE tracks SET duration = ?, description = COALESCE(?, description) WHERE id = ?',
+                (duration, description, row[0]),
             )
             return row[0]
         cur = conn.execute(
-            'INSERT INTO tracks(title, album_id, artist_id, duration) '
-            'VALUES (?, NULL, ?, ?)',
-            (title, artist_id, duration),
+            'INSERT INTO tracks(title, album_id, artist_id, duration, description) '
+            'VALUES (?, NULL, ?, ?, ?)',
+            (title, artist_id, duration, description),
         )
         track_id = cur.lastrowid
     assert track_id is not None
@@ -344,7 +361,7 @@ _CURRENT_SQL = """
 SELECT a.title AS Artist, al.title AS Album, t.title AS Title,
        al.id AS AlbumId, al.cover_url AS CoverUrl, t.id AS TrackId,
        COALESCE(f.count, 0) AS FavouriteCount, t.duration AS Duration,
-       al.review AS Review
+       al.review AS Review, t.description AS Description
 FROM history h
 JOIN tracks t ON t.id = h.track_id
 LEFT JOIN albums al ON al.id = t.album_id
@@ -400,6 +417,7 @@ async def aget_current(db_path: str) -> dict | None:
         'FavouriteCount': track[6],
         'Duration': track[7],
         'Review': track[8],
+        'Description': track[9],
     }
 
 

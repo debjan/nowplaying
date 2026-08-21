@@ -178,6 +178,7 @@ def _payload(track: dict) -> dict:
         'Duration': track.get('Duration'),
         'TrackId': track.get('TrackId'),
         'Review': track.get('Review'),
+        'Description': track.get('Description'),
         'Loved': bool(
             config.PREVIOUS_LOVE and track.get('FavouriteCount', 0) >= 3
         ),

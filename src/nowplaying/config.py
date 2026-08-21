@@ -71,5 +71,6 @@ PLAYERCTL_PLAYER = get_env('PLAYERCTL_PLAYER')
 YT_DLP = get_env('YT_DLP', '').strip().lower() in ('1', 'true', 'yes', 'on')
 FANART_PROJECT = 'b3ef17e6708a180bc9830f9b6e67d43f'
 FANART_API_KEY = get_env('FANART_API_KEY')
+GOOGLE_API_KEY = get_env('GOOGLE_API_KEY')
 
 ensure_dirs()
