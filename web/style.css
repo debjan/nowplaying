@@ -276,6 +276,10 @@ body.no-scroll {
     flex-shrink: 0;
 }
 
+.controls[hidden] {
+    display: none;
+}
+
 .controls path {
     fill: currentColor;
 }
@@ -333,6 +337,10 @@ body.no-scroll {
     overflow: hidden;
     width: 100%;
     flex-shrink: 0;
+}
+
+.progress[hidden] {
+    display: none;
 }
 
 .progress-fill {

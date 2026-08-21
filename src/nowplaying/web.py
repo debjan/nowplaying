@@ -3,6 +3,7 @@
 import asyncio
 import json
 import re
+import shutil
 import sqlite3
 import time
 from contextlib import suppress
@@ -182,6 +183,7 @@ def _payload(track: dict) -> dict:
         'Loved': bool(
             config.PREVIOUS_LOVE and track.get('FavouriteCount', 0) >= 3
         ),
+        'PlayerctlAvailable': shutil.which('playerctl') is not None,
     }
 
 

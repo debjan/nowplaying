@@ -103,7 +103,17 @@
             const themeBtn = document.getElementById('theme-btn');
             const themeDot = document.getElementById('theme-dot');
             const themeMenu = document.getElementById('theme-menu');
+            const controls = document.querySelector('.controls');
+            const progress = document.getElementById('progress');
             const source = new EventSource('/api/track/stream');
+            
+            // Hide controls and progress initially until we know playerctl availability
+            if (controls) {
+                controls.hidden = true;
+            }
+            if (progress) {
+                progress.hidden = true;
+            }
 
             // Restore the saved theme; default to mocha.
             const savedTheme = localStorage.getItem('theme') || 'catppuccin-mocha';
@@ -277,6 +287,27 @@
                     trackEl.appendChild(row);
                 });
                 artEl.src = data['Album Art'] || 'cover.svg';
+                
+                // Update playerctl availability state
+                playerctlAvailable = data.PlayerctlAvailable;
+                
+                // Hide playback controls if playerctl is not available
+                const controls = document.querySelector('.controls');
+                if (controls) {
+                    controls.hidden = !data.PlayerctlAvailable;
+                }
+                
+                // Also hide progress bar when playerctl is unavailable
+                const progress = document.getElementById('progress');
+                if (progress) {
+                    progress.hidden = !data.PlayerctlAvailable;
+                }
+                
+                // Stop playback status polling if playerctl is unavailable
+                if (!data.PlayerctlAvailable && playbackInterval) {
+                    clearInterval(playbackInterval);
+                    playbackInterval = null;
+                }
             };
 
             artEl.onerror = () => {
@@ -300,11 +331,12 @@
         let lastTickTs = Date.now();
         let lastTrackId = null;
         let progressActive = false;
+        let playerctlAvailable = false;
 
         function updateProgress() {
             const bar = document.getElementById('progress');
             const fill = document.getElementById('progress-fill');
-            if (!durationMs) {
+            if (!durationMs || !playerctlAvailable) {
                 bar.hidden = true;
                 return;
             }
@@ -354,8 +386,10 @@
             btn.addEventListener('click', () => sendControl(btn.dataset.action));
         });
 
-        refreshPlayback();
-        setInterval(refreshPlayback, 3000);
+        let playbackInterval = null;
+        refreshPlayback().then(() => {
+            playbackInterval = setInterval(refreshPlayback, 3000);
+        });
         setInterval(updateProgress, 1000);
 
         function renderMarkdown(text) {
