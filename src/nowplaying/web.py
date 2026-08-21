@@ -16,11 +16,11 @@ from fastapi.responses import HTMLResponse, PlainTextResponse, StreamingResponse
 
 from nowplaying import config, db
 
-ROOT_DIR = Path(__file__).resolve().parent.parent.parent
-INDEX = ROOT_DIR / 'static' / 'index.html'
-CSS = ROOT_DIR / 'static' / 'style.css'
-COVER_SVG = ROOT_DIR / 'static' / 'cover.svg'
-THEMES_DIR = ROOT_DIR / 'static' / 'themes'
+WEB_DIR = Path(__file__).resolve().parent.parent.parent / 'web'
+INDEX = WEB_DIR / 'index.html'
+CSS = WEB_DIR / 'style.css'
+COVER_SVG = WEB_DIR / 'cover.svg'
+THEMES_DIR = WEB_DIR / 'themes'
 
 PLAYERCTL_ACTIONS = frozenset({'play-pause', 'next', 'previous'})
 
