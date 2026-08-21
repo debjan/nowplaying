@@ -2,7 +2,7 @@
 
 "Now playing" dashboard that captures Bluetooth A2DP track metadata and shows it on a minimal web page with playback controls and **live push updates** (no client polling for track data).
 
-![screenshot](./img/Screenshot.jpg)
+![screenshot](./img/screenshot.png)
 
 ## How it works
 
