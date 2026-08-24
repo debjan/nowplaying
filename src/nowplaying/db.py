@@ -62,7 +62,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_tracks_title_album_artist
   ON tracks(title, album_id, artist_id);
 """
 
-# This is the single place a schema evolution is expressed — there is no
+# This is the single place a schema evolution is expressed - there is no
 # separate versioned migration list.
 _EXTRA_COLUMNS: dict[str, dict[str, str]] = {
     'tracks': {'description': 'TEXT'},

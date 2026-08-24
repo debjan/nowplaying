@@ -164,7 +164,7 @@ def download_cover(url: str, trim: bool = True) -> str | None:
 def yt_dlp(artist: str, album: str, title: str) -> str | None:
     """Return a YouTube thumbnail URL for the track, or None if unavailable."""
 
-    if not shutil.which("yt-dlp"):
+    if not (shutil.which("yt-dlp") and config.YT_DLP):
         return None
     query = f'ytsearch1:{artist},{album},{title}'
     cmd = ['nice', '-n', '15', 'yt-dlp', query, '--flat-playlist', '--dump-single-json', '--playlist-items', '1']
@@ -183,6 +183,18 @@ def yt_dlp(artist: str, album: str, title: str) -> str | None:
     else:
         logger.warning('[yt-dlp] No entries')
     return None
+
+
+def get_youtube_image_url(video_id: str) -> str | None:
+    """Return cover url from YouTube video_id"""
+
+    url_prefix = f'https://img.youtube.com/vi/{video_id}'
+    url = (
+        validate_url(f'{url_prefix}/maxresdefault.jpg') or
+        validate_url(f'{url_prefix}/sddefault.jpg') or
+        validate_url(f'{url_prefix}/hddefault.jpg')
+    )
+    return url
 
 
 def get_release(artist: str, album: str) -> str | None:
@@ -218,9 +230,7 @@ def fanart_cover(release_group_id: str) -> str | None:
             return
         response.raise_for_status()
         if albums := response.json().get('albums'):
-            logger.debug(f'[fanart] {albums}')
             if albumcover := albums[0].get('albumcover'):
-                logger.debug(f'[fanart] {albumcover}')
                 return albumcover[0]['url']
     except Exception as e:
         logger.warning(f'[fanart] Error: {e}')
@@ -253,7 +263,7 @@ def verify_description(desc: str) -> str | None:
 def verify_coverarchive(release_group_id: str) -> str | None:
     """Verify coverartarchive url resolves."""
 
-    validate_url(f'https://coverartarchive.org/release-group/{release_group_id}/front-500')
+    return validate_url(f'https://coverartarchive.org/release-group/{release_group_id}/front-500')
 
 
 def youtube_description(video_id: str) -> str | None:
@@ -369,28 +379,24 @@ class TrackMonitor:
     def _cover_for(self, artist: str, album: str, title: str) -> tuple[str | None, str | None, str | None]:
         """Return the raw thumbnail URL, MusicBrainz release-group id, and YouTube video id."""
 
-        if album == _DEFAULTS['Album']:
-            return None, None, None
-
-        query = (artist, album)
+        release_group_id = db.release_for(self._conn, artist, album)
+        query = (artist, title)
         if query not in self._cover_cache:
             if len(self._cover_cache) >= self._COVER_CACHE_MAX:
                 self._cover_cache.popitem(last=False)
-            release_group_id = db.release_for(self._conn, artist, album)
-            if not release_group_id:
-                release_group_id = get_release(artist, album)
             url = None
             video_id = None
-            if release_group_id:
-                url = fanart_cover(release_group_id) or verify_coverarchive(release_group_id)
-            if not url and config.YT_DLP:
-                if video_id := yt_dlp(artist, album, title):
-                    if url := validate_url(f'https://img.youtube.com/vi/{video_id}/maxresdefault.jpg'):
-                        pass
-                    elif url := validate_url(f'https://img.youtube.com/vi/{video_id}/sddefault.jpg'):
-                        pass
-                    else:
-                        url = f'https://img.youtube.com/vi/{video_id}/hddefault.jpg'
+            if album == _DEFAULTS['Album']:
+                if video_id := yt_dlp(artist, '', title):
+                    url = get_youtube_image_url(video_id)
+            else:
+                if not release_group_id:
+                    release_group_id = get_release(artist, album)
+                if release_group_id:
+                    url = fanart_cover(release_group_id) or verify_coverarchive(release_group_id)
+                if not url:
+                    if video_id := yt_dlp(artist, album, title):
+                        url = get_youtube_image_url(video_id)
             self._cover_cache[query] = (url, release_group_id, video_id, time.monotonic() if not url else None)
         else:
             self._cover_cache.move_to_end(query)
@@ -407,7 +413,6 @@ class TrackMonitor:
                 logger.debug('[cover] download failed; skipping art')
                 return None, None, None
             self._last_cover_url = url
-        logger.debug(f'[_cover_for] {url}')
         return url, release_group_id, video_id
 
     def _auto_skip(self) -> None:
@@ -450,17 +455,6 @@ class TrackMonitor:
             logger.debug('[write] skip: Artist/Title not complete yet')
             return
 
-        try:
-            cover, release_group_id, video_id = self._cover_for(
-                self.track_info['Artist'],
-                self.track_info['Album'],
-                self.track_info['Title'],
-            )
-            logger.debug(f'[write] cover={cover} release_group_id={release_group_id}')
-        except Exception:
-            logger.exception('[Error] cover lookup failed; persisting track without art')
-            cover = release_group_id = video_id = None
-
         album = (
             None
             if self.track_info['Album'] == _DEFAULTS['Album']
@@ -475,6 +469,22 @@ class TrackMonitor:
         artist = self.track_info['Artist']
         album_name = self.track_info['Album']
         title = self.track_info['Title']
+        cover = release_group_id = video_id = None
+
+        if duration:
+            try:
+                cover, release_group_id, video_id = self._cover_for(
+                    self.track_info['Artist'],
+                    self.track_info['Album'],
+                    self.track_info['Title'],
+                )
+                logger.debug(f'[write] cover={cover} release_group_id={release_group_id}')
+            except Exception:
+                logger.exception('[Error] cover lookup failed; persisting track without art')
+                cover = release_group_id = video_id = None
+
+            if cover and album is None:
+                album = title
 
         if release_group_id and (artist, album_name) not in self._review_attempted:
             self._review_attempted.add((artist, album_name))
@@ -599,7 +609,7 @@ async def _run(bus: MessageBus, monitor: TrackMonitor) -> None:
             )
         )
     except DBusError as e:
-        logger.error(f'[dbus] AddMatch failed: {e} — no signals will be delivered')
+        logger.error(f'[dbus] AddMatch failed: {e} - no signals will be delivered')
     else:
         logger.debug(f'[dbus] AddMatch registered: {_MATCH_RULE}')
     await bus.wait_for_disconnect()

@@ -1,11 +1,15 @@
 @import "themes/catppuccin-mocha.css";
 
+/* Theme Variables */
+
 :root {
     --foreground-color: var(--foreground, #EBDBB2);
     --background-color: var(--background, #1D2021);
     --shadow-color: var(--shadow, #3C3836);
     --accent-color: var(--accent, #B8BB26);
 }
+
+/* Base / Reset */
 
 body {
     font-family: system-ui, -apple-system, sans-serif;
@@ -17,6 +21,28 @@ body {
     justify-content: center;
     margin: 0;
 }
+
+body.no-scroll {
+    overflow: hidden;
+}
+
+h1 {
+    font-size: 1.2rem;
+    color: var(--accent-color);
+    margin-top: 0;
+    margin-bottom: 0;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    flex-shrink: 0;
+}
+
+span.centered {
+    display: block;
+    width: max-content;
+    margin: 0 auto;
+}
+
+/* Layout — Card & Structure */
 
 .card {
     display: flex;
@@ -32,15 +58,58 @@ body {
     box-sizing: border-box;
 }
 
-h1 {
-    font-size: 1.2rem;
-    color: var(--accent-color);
-    margin-top: 0;
-    margin-bottom: 0;
-    text-transform: uppercase;
-    letter-spacing: 1px;
+.header-container {
+    display: flex;
+    justify-content: space-between;
+}
+
+.main {
+    display: contents;
+}
+
+.main-right {
+    display: contents;
+}
+
+.track {
+    margin-top: 1.5rem;
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    min-height: 0;
+    flex-shrink: 1;
+}
+
+.cover {
+    margin-top: 1.5rem;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 0;
+    overflow: hidden;
+    flex-shrink: 1;
+}
+
+.cover > img {
+    border: 1px solid var(--shadow-color);
+}
+
+.art {
+    border-radius: 12px;
+    object-fit: cover;
+    flex-shrink: 0;
+    max-width: 100%;
+    max-height: 60vh;
+    height: auto;
+    width: auto;
+}
+
+.spacer {
+    flex-grow: 1;
     flex-shrink: 0;
 }
+
+/* Track Info */
 
 .track-text {
     font-size: 1.1rem;
@@ -66,6 +135,33 @@ h1 {
     align-items: center;
     gap: 0.5rem;
 }
+
+.track-row:last-of-type {
+    font-weight: 700;
+}
+
+.track-row span {
+    white-space: nowrap;
+    padding-left: 1rem;
+}
+
+.track-row.has-review {
+    cursor: pointer;
+    border-radius: 6px;
+    transition: background 0.1s ease;
+}
+
+.track-row.has-review .track-icon:hover {
+    stroke: none;
+}
+
+@media (hover: hover) {
+    .track-row.has-review:hover {
+        background: color-mix(in srgb, var(--background-color), var(--foreground-color) 8%);
+    }
+}
+
+/* Track icons */
 
 .track-icon {
     width: 1.4rem;
@@ -100,30 +196,169 @@ h1 {
     fill: var(--foreground-color);
 }
 
-.track-row span {
-    white-space: nowrap;
-    padding-left: 1rem;
+/* Playback — Progress & Controls */
+
+.progress {
+    margin-top: 1rem;
+    margin-bottom: 1rem;
+    height: 1px;
+    background: var(--shadow-color);
+    overflow: hidden;
+    width: 100%;
+    flex-shrink: 0;
 }
 
-.track-row.has-review {
+.progress[hidden] {
+    display: none;
+}
+
+.progress-fill {
+    height: 100%;
+    width: 0;
+    background: var(--accent-color);
+    transition: width 0.8s linear;
+}
+
+.controls {
+    display: flex;
+    justify-content: space-around;
+    align-items: center;
+    margin-top: 1rem;
+    flex-shrink: 0;
+}
+
+.controls[hidden] {
+    display: none;
+}
+
+.controls path {
+    fill: currentColor;
+}
+
+.controls rect {
+    fill: none;
+}
+
+.btn {
+    background: none;
+    border: none;
+    color: var(--foreground-color);
+    font-size: 1.6rem;
+    line-height: 1;
     cursor: pointer;
-    border-radius: 6px;
-    transition: background 0.1s ease;
+    padding: 0.5rem 0.9rem;
+    transition: transform 0.1s ease, color 0.1s ease;
+}
+
+.btn:active {
+    transform: scale(0.85);
 }
 
 @media (hover: hover) {
-    .track-row.has-review:hover {
-        background: color-mix(in srgb, var(--background-color), var(--foreground-color) 8%);
+    .btn:hover {
+        color: var(--accent-color);
     }
 }
 
-.track-row.has-review .track-icon:hover {
-    stroke: none;
+.btn-play {
+    font-size: 2.2rem;
+    color: color-mix(in srgb, var(--accent-color), var(--background-color) 20%);
 }
 
-body.no-scroll {
-    overflow: hidden;
+.btn-play:not(.playing) {
+    color: var(--foreground-color);
 }
+
+.btn-play:not(.playing) .icon-pause,
+.btn-play.playing .icon-play {
+    display: none;
+}
+
+@media (hover: hover) {
+    .btn-play:hover {
+        color: var(--accent-color);
+    }
+}
+
+/* Theme Picker */
+
+.theme {
+    display: flex;
+    align-items: center;
+}
+
+.theme-picker {
+    position: relative;
+}
+
+.theme-btn {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    background: transparent;
+    color: var(--foreground-color);
+    border: 1px solid var(--shadow-color);
+    border-radius: 6px;
+    padding: 0.15rem 0.35rem;
+    font-family: inherit;
+    font-size: 1rem;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.theme-btn:hover,
+.theme-btn:focus-visible {
+    border-color: var(--accent-color);
+    outline: none;
+}
+
+.theme-dot {
+    font-size: 0.9rem;
+    line-height: 1;
+}
+
+.theme-menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    z-index: 10;
+    list-style: none;
+    margin: 0;
+    padding: 0.25rem;
+    min-width: 9rem;
+    background: var(--background-color);
+    border: 1px solid var(--shadow-color);
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+}
+
+.theme-menu li {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.3rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.85rem;
+    color: var(--foreground-color);
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.theme-menu li:hover {
+    background: color-mix(in srgb, var(--background-color), var(--foreground-color) 10%);
+}
+
+.theme-menu li.selected {
+    font-weight: 700;
+}
+
+.menu-dot {
+    font-size: 0.7rem;
+    line-height: 1;
+    flex-shrink: 0;
+}
+
+/* Review Popup */
 
 .review-popup {
     position: fixed;
@@ -227,212 +462,55 @@ body.no-scroll {
     color: var(--accent-color);
 }
 
-.track-row:last-of-type {
-    font-weight: 700;
-}
+/* Responsive */
 
-.track {
-    margin-top: 2.5rem;
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-    min-height: 0;
-    flex-shrink: 1;
-}
-
-.cover {
-    margin-top: 2.5rem;
-    display: flex;
-    justify-content: center;
-    min-height: 0;
-    overflow: hidden;
-    flex-shrink: 1;
-}
-
-.cover > img {
-    border: 1px solid var(--shadow-color);
-}
-
-.art {
-    border-radius: 12px;
-    object-fit: cover;
-    flex-shrink: 0;
-    max-width: 100%;
-    max-height: 60vh;
-    height: auto;
-    width: auto;
-}
-
-.spacer {
-    flex-grow: 1;
-    flex-shrink: 0;
-}
-
-.controls {
-    display: flex;
-    justify-content: space-around;
-    align-items: center;
-    margin-top: 1rem;
-    flex-shrink: 0;
-}
-
-.controls[hidden] {
-    display: none;
-}
-
-.controls path {
-    fill: currentColor;
-}
-
-.controls rect {
-    fill: none;
-}
-
-.btn {
-    background: none;
-    border: none;
-    color: var(--foreground-color);
-    font-size: 1.6rem;
-    line-height: 1;
-    cursor: pointer;
-    padding: 0.5rem 0.9rem;
-    transition: transform 0.1s ease, color 0.1s ease;
-}
-
-@media (hover: hover) {
-    .btn:hover {
-        color: var(--accent-color);
+@media (orientation: landscape) and (max-height: 500px) {
+    .card {
+        width: 720px;
+        max-width: calc(100vw - 2rem);
     }
-}
 
-.btn:active {
-    transform: scale(0.85);
-}
-
-.btn-play {
-    font-size: 2.2rem;
-    color: color-mix(in srgb, var(--accent-color), var(--background-color) 20%);
-}
-
-.btn-play:not(.playing) {
-    color: var(--foreground-color);
-}
-
-.btn-play:not(.playing) .icon-pause,
-.btn-play.playing .icon-play {
-    display: none;
-}
-
-@media (hover: hover) {
-    .btn-play:hover {
-        color: var(--accent-color);
+    .header-container {
+        display: none;
     }
-}
 
-.progress {
-    margin-top: 1rem;
-    margin-bottom: 1rem;
-    height: 1px;
-    background: var(--shadow-color);
-    overflow: hidden;
-    width: 100%;
-    flex-shrink: 0;
-}
+    .main {
+        display: flex;
+        flex-direction: row;
+        gap: 2rem;
+        flex: 1;
+        min-height: 0;
+        margin-top: 1rem;
+    }
 
-.progress[hidden] {
-    display: none;
-}
+    .main .cover,
+    .main .track {
+        margin-top: 0;
+    }
 
-.progress-fill {
-    height: 100%;
-    width: 0;
-    background: var(--accent-color);
-    transition: width 0.8s linear;
-}
+    .main .cover {
+        flex: 0 0 48%;
+        align-items: center;
+    }
 
-span.centered {
-    display: block;
-    width: max-content;
-    margin: 0 auto;
-}
+    .main .progress,
+    .main .controls {
+        margin: 0.5rem 0;
+    }
 
-.header-container {
-    display: flex;
-    justify-content: space-between;
-}
+    .main-right {
+        display: flex;
+        flex-direction: column;
+        flex: 1;
+        min-width: 0;
+        min-height: 0;
+    }
 
-.theme {
-    display: flex;
-    align-items: center;
-}
+    .main-right .track {
+        flex-shrink: 0;
+    }
 
-.theme-picker {
-    position: relative;
-}
-
-.theme-btn {
-    display: flex;
-    align-items: center;
-    gap: 0.25rem;
-    background: transparent;
-    color: var(--foreground-color);
-    border: 1px solid var(--shadow-color);
-    border-radius: 6px;
-    padding: 0.15rem 0.35rem;
-    font-family: inherit;
-    font-size: 1rem;
-    line-height: 1;
-    cursor: pointer;
-}
-
-.theme-btn:hover,
-.theme-btn:focus-visible {
-    border-color: var(--accent-color);
-    outline: none;
-}
-
-.theme-dot {
-    font-size: 0.9rem;
-    line-height: 1;
-}
-
-.theme-menu {
-    position: absolute;
-    top: calc(100% + 4px);
-    right: 0;
-    z-index: 10;
-    list-style: none;
-    margin: 0;
-    padding: 0.25rem;
-    min-width: 9rem;
-    background: var(--background-color);
-    border: 1px solid var(--shadow-color);
-    border-radius: 8px;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
-}
-
-.theme-menu li {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    padding: 0.3rem 0.5rem;
-    border-radius: 4px;
-    font-size: 0.85rem;
-    color: var(--foreground-color);
-    cursor: pointer;
-    white-space: nowrap;
-}
-
-.theme-menu li:hover {
-    background: color-mix(in srgb, var(--background-color), var(--foreground-color) 10%);
-}
-
-.theme-menu li.selected {
-    font-weight: 700;
-}
-
-.menu-dot {
-    font-size: 0.7rem;
-    line-height: 1;
-    flex-shrink: 0;
+    .art {
+        max-height: none;
+    }
 }

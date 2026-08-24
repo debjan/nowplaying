@@ -26,7 +26,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # Load .env from the repo root (independent of the caller's cwd).
-# dotenv does NOT override vars already in the environment — real env wins.
+# dotenv does NOT override vars already in the environment - real env wins.
 load_dotenv(Path(__file__).resolve().parent.parent.parent / '.env')
 
 

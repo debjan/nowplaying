@@ -63,7 +63,7 @@ uv run uvicorn nowplaying.web:app
 
 ## Configuration
 
-All knobs are env vars (real env → `.env` → defaults). See `.env.example`.
+All knobs are env vars (real env -> `.env` -> defaults). See `.env.example`.
 
 | Variable                              | Default                                   | Purpose                                                |
 | ------------------------------------- | ----------------------------------------- | ------------------------------------------------------ |
@@ -83,12 +83,12 @@ Swagger UI at `http://<device-ip>:<port>/docs`
 
 I made this after plugging my amp to my raspberry pi, making it bluetooth receiver while wanted access and control from any device in my LAN
 
-- **Smart home / wall-mounted dashboard** — show what's playing on a shared Bluetooth speaker or Hi-Fi in a living room, office, updating live.
-- **Home theater / music room display** — a tiny screen showing track, artist, and album art while audio streams over Bluetooth A2DP.
-- **LAN remote control** — the built-in buttons drive the active MPRIS player via `playerctl`, so you can pause/skip without touching the source.
-- **Playback history / stats** — the monitor records every track change as a row in the `history` table, so play history and listening stats can be queried from the same database.
-- **Skip / auto-skip** — pressing **Next** counts a skip for the current track in the `skips` table (always recorded). With `SKIP_FOREVER` enabled, any track skipped 3 or more times is auto-skipped (`playerctl next`) the next time it plays; auto-skipped tracks are logged to `history` (as `auto_skipped`) but never shown as the current track.
-- **Favourites / loved** — pressing **Previous** while a track is playing counts a favourite for that track in the `favourites` table (always recorded). With `PREVIOUS_LOVE` enabled, a track favoured 3 or more times is shown as **loved** with a heart icon on its Title row.
+- **Smart home / wall-mounted dashboard** - show what's playing on a shared Bluetooth speaker or Hi-Fi in a living room, office, updating live.
+- **Home theater / music room display** - a tiny screen showing track, artist, and album art while audio streams over Bluetooth A2DP.
+- **LAN remote control** - the built-in buttons drive the active MPRIS player via `playerctl`, so you can pause/skip without touching the source.
+- **Playback history / stats** - the monitor records every track change as a row in the `history` table, so play history and listening stats can be queried from the same database.
+- **Skip / auto-skip** - pressing **Next** counts a skip for the current track in the `skips` table (always recorded). With `SKIP_FOREVER` enabled, any track skipped 3 or more times is auto-skipped (`playerctl next`) the next time it plays; auto-skipped tracks are logged to `history` (as `auto_skipped`) but never shown as the current track.
+- **Favourites / loved** - pressing **Previous** while a track is playing counts a favourite for that track in the `favourites` table (always recorded). With `PREVIOUS_LOVE` enabled, a track favoured 3 or more times is shown as **loved** with a heart icon on its Title row.
 
 ## Deployment (systemd user services)
 
