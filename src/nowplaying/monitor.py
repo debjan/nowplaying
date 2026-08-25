@@ -431,6 +431,14 @@ class TrackMonitor:
                 check=False,
             )
 
+    def set_position(self, position_ms: int) -> None:
+        """Persist a seek/position update (Position-only signal, no history row)."""
+        try:
+            db.set_position(self._conn, position_ms)
+            logger.debug(f'[position] {position_ms} ms')
+        except Exception as e:
+            logger.warning(f'[Error] could not store position: {e}')
+
     def apply(self, fields: dict[str, str]) -> None:
         """Apply one D-Bus signal's field updates; write once if anything changed."""
 
@@ -515,6 +523,7 @@ class TrackMonitor:
             auto = config.SKIP_FOREVER and skip_count >= 3
             logger.debug(f'[write] skip_count={skip_count} auto_skip={auto}')
             db.record_history(self._conn, track_id, auto_skipped=auto)
+            db.set_position(self._conn, 0)
         except Exception as e:
             logger.critical(f'[Error] could not write to database: {e}')
             auto = False
@@ -583,6 +592,14 @@ async def _run(bus: MessageBus, monitor: TrackMonitor) -> None:
         changed = msg.body[1]
         invalidated = msg.body[2] if len(msg.body) > 2 else []
         if 'Track' not in changed and 'Track' not in invalidated:
+            # Position-only signal (seek / player tick): persist it for SSE.
+            if 'Position' in changed:
+                try:
+                    position = int(changed['Position'].value)
+                except (TypeError, ValueError):
+                    logger.debug(f'[dbus] unparseable Position: {changed["Position"]!r}')
+                    return
+                monitor.set_position(position)
             return
         if 'Track' in changed:
             fields = _extract_track(changed['Track'].value)

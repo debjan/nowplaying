@@ -193,6 +193,7 @@ async def track_stream() -> StreamingResponse:
         last: int | None = None
         first = True
         last_ping = 0.0
+        last_position_key: tuple[int, str] | None = None
         while True:
             try:
                 key = await db.alatest_history_id(config.DB_PATH)
@@ -212,7 +213,21 @@ async def track_stream() -> StreamingResponse:
                     payload = json.dumps(_payload(data))
                 yield 'data: ' + payload + '\n\n'
                 last_ping = now
-            elif now - last_ping >= 15:
+                last_position_key = None
+            else:
+                try:
+                    position = await db.aget_position(config.DB_PATH)
+                except (OSError, sqlite3.Error):
+                    position = None
+                if position is not None and position != last_position_key:
+                    last_position_key = position
+                    yield (
+                        'event: position\ndata: '
+                        + json.dumps({'Position': position[0]})
+                        + '\n\n'
+                    )
+                    last_ping = now
+            if now - last_ping >= 15:
                 yield ': ping\n\n'
                 last_ping = now
             await asyncio.sleep(0.5)

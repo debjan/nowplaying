@@ -51,6 +51,12 @@ CREATE TABLE IF NOT EXISTS history (
   auto_skipped INTEGER DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS playback (
+  id          INTEGER PRIMARY KEY CHECK (id = 1),
+  position_ms INTEGER NOT NULL,
+  updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE UNIQUE INDEX IF NOT EXISTS idx_skips_track_id ON skips(track_id);
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_favourites_track_id ON favourites(track_id);
@@ -348,6 +354,22 @@ def increment_favourite(conn: sqlite3.Connection, track_id: int) -> None:
     conn.commit()
 
 
+def set_position(conn: sqlite3.Connection, position_ms: int) -> None:
+    """Upsert the single playback-position row and commit."""
+
+    conn.execute(
+        """
+        INSERT INTO playback(id, position_ms, updated_at)
+        VALUES (1, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(id) DO UPDATE SET
+            position_ms = excluded.position_ms,
+            updated_at  = CURRENT_TIMESTAMP
+        """,
+        (position_ms,),
+    )
+    conn.commit()
+
+
 def latest_history_id(conn: sqlite3.Connection) -> int | None:
     row = conn.execute('SELECT MAX(id) FROM history').fetchone()
     return row[0] if row and row[0] is not None else None
@@ -419,6 +441,17 @@ async def aget_current(db_path: str) -> dict | None:
         'Review': track[8],
         'Description': track[9],
     }
+
+
+async def aget_position(db_path: str) -> tuple[int, str] | None:
+    """Return the latest `(position_ms, updated_at)` playback row, or `None`."""
+
+    row = await _afetchone(
+        db_path, 'SELECT position_ms, updated_at FROM playback WHERE id = 1'
+    )
+    if row is None:
+        return None
+    return (int(row[0]), str(row[1]))
 
 
 async def aincrement_skip(db_path: str, track_id: int) -> None:

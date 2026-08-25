@@ -103,6 +103,7 @@
         </div>
     </div>
     <script>
+        const source = new EventSource('/api/track/stream');
         window.addEventListener('DOMContentLoaded', () => {
             const trackEl = document.getElementById('track');
             const artEl = document.getElementById('art');
@@ -111,7 +112,6 @@
             const themeMenu = document.getElementById('theme-menu');
             const controls = document.querySelector('.controls');
             const progress = document.getElementById('progress');
-            const source = new EventSource('/api/track/stream');
             
             // Hide controls and progress initially until we know playerctl availability
             if (controls) {
@@ -246,6 +246,7 @@
                         positionMs = 0;
                         lastTickTs = Date.now();
                     }
+                    positionSynced = false;
                     lastTrackId = id;
                 }
                 durationMs = Number(data.Duration) || 0;
@@ -338,11 +339,12 @@
         let lastTrackId = null;
         let progressActive = false;
         let playerctlAvailable = false;
+        let positionSynced = false;
 
         function updateProgress() {
             const bar = document.getElementById('progress');
             const fill = document.getElementById('progress-fill');
-            if (!durationMs || !playerctlAvailable) {
+            if (!durationMs || !playerctlAvailable || !positionSynced) {
                 bar.hidden = true;
                 return;
             }
@@ -397,6 +399,22 @@
             playbackInterval = setInterval(refreshPlayback, 3000);
         });
         setInterval(updateProgress, 1000);
+
+        source.addEventListener('position', (event) => {
+            let data;
+            try {
+                data = JSON.parse(event.data);
+            } catch {
+                return;
+            }
+            if (typeof data.Position !== 'number') {
+                return;
+            }
+            positionMs = data.Position;
+            lastTickTs = Date.now();
+            progressActive = true;
+            positionSynced = true;
+        });
 
         function renderMarkdown(text) {
             const esc = (s) =>
