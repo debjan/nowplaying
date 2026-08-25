@@ -92,7 +92,6 @@
             </symbol>
         </svg>
     </div>
-    </div>
     <div id="review-popup" class="review-popup" hidden>
         <div class="review-popup-card" role="dialog" aria-modal="true" aria-labelledby="review-title">
             <div class="review-popup-header">
@@ -229,6 +228,7 @@
                     data = null;
                 }
                 if (!data || data.error) {
+                    lastRenderKey = null;
                     if (data && data.error) {
                         trackEl.innerHTML = data.error;
                     } else {
@@ -250,6 +250,21 @@
                     lastTrackId = id;
                 }
                 durationMs = Number(data.Duration) || 0;
+                const art = data['Album Art'] || 'cover.svg';
+                if (!artEl.src.endsWith(art)) {
+                    artEl.src = art;
+                }
+                // Rebuild the track rows only when the rendered content changes;
+                // SSE re-emits the current track on every reconnect.
+                const renderKey = JSON.stringify([
+                    data.Artist, data.Album, data.Title,
+                    data.Loved, data.Review, data.Description,
+                ]);
+                if (renderKey === lastRenderKey) {
+                    playerctlAvailable = data.PlayerctlAvailable;
+                    return;
+                }
+                lastRenderKey = renderKey;
                 const rows = [
                     ['icon-user', data.Artist, false, null, null],
                     ...(data.Album && data.Album !== data.Title
@@ -293,7 +308,6 @@
                     }
                     trackEl.appendChild(row);
                 });
-                artEl.src = data['Album Art'] || 'cover.svg';
 
                 // Update playerctl availability state
                 playerctlAvailable = data.PlayerctlAvailable;
@@ -335,15 +349,16 @@
         let progressActive = false;
         let playerctlAvailable = false;
         let positionSynced = false;
+        let lastRenderKey = null;
+        const progressBar = document.getElementById('progress');
+        const progressFill = document.getElementById('progress-fill');
 
         function updateProgress() {
-            const bar = document.getElementById('progress');
-            const fill = document.getElementById('progress-fill');
             if (!durationMs || !playerctlAvailable || !positionSynced) {
-                bar.hidden = true;
+                progressBar.hidden = true;
                 return;
             }
-            bar.hidden = false;
+            progressBar.hidden = false;
             const now = Date.now();
             if (progressActive && playBtn.classList.contains('playing')) {
                 positionMs += now - lastTickTs;
@@ -352,7 +367,7 @@
             if (positionMs / durationMs >= 1) {
                 positionMs = 0;
             }
-            fill.style.width = (Math.min(1, positionMs / durationMs) * 100).toFixed(2) + '%';
+            progressFill.style.width = (Math.min(1, positionMs / durationMs) * 100).toFixed(2) + '%';
         }
 
         async function sendControl(action) {
