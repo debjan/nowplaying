@@ -6,14 +6,20 @@ import re
 import shutil
 import sqlite3
 import time
-from contextlib import suppress
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
 import aiofiles
 import aiofiles.os
 import uvicorn
-from fastapi import FastAPI, HTTPException, Response
-from fastapi.responses import HTMLResponse, PlainTextResponse, StreamingResponse
+from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    PlainTextResponse,
+    StreamingResponse,
+)
 
 from nowplaying import config, db
 
@@ -25,17 +31,54 @@ THEMES_DIR = WEB_DIR / 'themes'
 
 PLAYERCTL_ACTIONS = frozenset({'play-pause', 'next', 'previous'})
 
+# PATH doesn't change mid-process; look this up once instead of per payload.
+PLAYERCTL_AVAILABLE = shutil.which('playerctl') is not None
+
 _ACCENT_RE = re.compile(r'--accent\s*:\s*(#[0-9a-fA-F]{3,8})')
 
-app = FastAPI(title='nowplaying')
 
-
-@app.on_event('shutdown')
-async def _stop_broadcaster() -> None:
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    yield
     if _broadcaster_task is not None:
         _broadcaster_task.cancel()
         with suppress(asyncio.CancelledError):
             await _broadcaster_task
+
+
+app = FastAPI(title='nowplaying', lifespan=lifespan)
+
+# --- Static asset serving -----------------------------------------------------
+#
+# Assets are cached in memory keyed by (mtime, size); clients revalidate via
+# ETag so unchanged files cost a 304 instead of a re-read + re-download.
+
+_asset_cache: dict[Path, tuple[str, bytes]] = {}
+
+
+async def _load_asset(path: Path) -> tuple[str, bytes] | None:
+    """Return `(etag, content)` for `path`, or None if it doesn't exist."""
+
+    try:
+        st = await aiofiles.os.stat(path)
+    except OSError:
+        return None
+    etag = f'"{st.st_mtime_ns:x}-{st.st_size:x}"'
+    cached = _asset_cache.get(path)
+    if cached is not None and cached[0] == etag:
+        return cached
+    async with aiofiles.open(path, 'rb') as f:
+        content = await f.read()
+    _asset_cache[path] = (etag, content)
+    return etag, content
+
+
+def _not_modified(request: Request, etag: str) -> bool:
+    return request.headers.get('if-none-match') == etag
+
+
+def _not_modified_response(etag: str) -> Response:
+    return Response(status_code=304, headers={'ETag': etag, 'Cache-Control': 'no-cache'})
 
 
 def _playerctl_cmd(action: str) -> list[str]:
@@ -80,36 +123,50 @@ async def read_track() -> dict | None:
 
 
 @app.get('/')
-async def index() -> HTMLResponse:
-    try:
-        async with aiofiles.open(INDEX, 'r', encoding='utf-8') as f:
-            content = await f.read()
-        return HTMLResponse(content, headers={'Cache-Control': 'no-store'})
-    except FileNotFoundError:
+async def index(request: Request) -> Response:
+    loaded = await _load_asset(INDEX)
+    if loaded is None:
         return HTMLResponse('<h1>Home page not found</h1>', status_code=404)
+    etag, content = loaded
+    if _not_modified(request, etag):
+        return _not_modified_response(etag)
+    return Response(
+        content=content,
+        media_type='text/html',
+        headers={'Cache-Control': 'no-cache', 'ETag': etag},
+    )
 
 
 @app.get('/style.css')
-async def css() -> Response:
-    try:
-        async with aiofiles.open(CSS, 'r', encoding='utf-8') as f:
-            content = await f.read()
-        return Response(content=content, media_type='text/css', headers={'Cache-Control': 'no-store'})
-    except FileNotFoundError:
+async def css(request: Request) -> Response:
+    loaded = await _load_asset(CSS)
+    if loaded is None:
         return Response('/* stylesheet not found */', status_code=404, media_type='text/css')
+    etag, content = loaded
+    if _not_modified(request, etag):
+        return _not_modified_response(etag)
+    return Response(
+        content=content,
+        media_type='text/css',
+        headers={'Cache-Control': 'no-cache', 'ETag': etag},
+    )
 
 
 @app.get('/themes/{filename}')
-async def theme(filename: str) -> Response:
+async def theme(filename: str, request: Request) -> Response:
     if '/' in filename or filename.startswith('.'):
         raise HTTPException(status_code=400, detail='Invalid theme filename')
-    path = THEMES_DIR / filename
-    try:
-        async with aiofiles.open(path, 'r', encoding='utf-8') as f:
-            content = await f.read()
-        return Response(content=content, media_type='text/css', headers={'Cache-Control': 'no-store'})
-    except FileNotFoundError:
+    loaded = await _load_asset(THEMES_DIR / filename)
+    if loaded is None:
         return Response('/* theme not found */', status_code=404, media_type='text/css')
+    etag, content = loaded
+    if _not_modified(request, etag):
+        return _not_modified_response(etag)
+    return Response(
+        content=content,
+        media_type='text/css',
+        headers={'Cache-Control': 'no-cache', 'ETag': etag},
+    )
 
 
 @app.get('/api/themes')
@@ -140,28 +197,38 @@ async def cover() -> Response:
     try:
         async with aiofiles.open(COVER_SVG, 'rb') as f:
             content = await f.read()
-        return Response(content=content, media_type='image/svg+xml', headers={'Cache-Control': 'no-store'})
     except FileNotFoundError:
         return Response(status_code=404)
+    return Response(
+        content=content,
+        media_type='image/svg+xml',
+        headers={'Cache-Control': 'public, max-age=86400'},
+    )
 
 
 @app.get(config.COVER_URL)
 async def cover_png() -> Response:
+    path = Path(config.COVER_FILE)
     try:
-        async with aiofiles.open(Path(config.COVER_FILE), 'rb') as f:
-            content = await f.read()
-        return Response(content=content, media_type='image/png', headers={'Cache-Control': 'no-store'})
-    except FileNotFoundError:
+        await aiofiles.os.stat(path)
+    except OSError:
         return Response(status_code=404)
+    # The URL is cache-busted via ?v=<hash>, so the file itself is immutable.
+    return FileResponse(
+        path,
+        media_type='image/png',
+        headers={'Cache-Control': 'public, max-age=604800, immutable'},
+    )
 
 
 @app.get('/favicon')
 async def favicon() -> Response:
-    try:
-        content = '<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256"><rect width="256" height="256" fill="none"/><line x1="48" y1="96" x2="48" y2="160" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="24"/><line x1="88" y1="32" x2="88" y2="224" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="24"/><line x1="128" y1="64" x2="128" y2="192" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="24"/><line x1="168" y1="96" x2="168" y2="160" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="24"/><line x1="208" y1="80" x2="208" y2="176" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="24"/></svg>'
-        return Response(content=content, media_type='image/svg+xml', headers={'Cache-Control': 'no-store'})
-    except FileNotFoundError:
-        return Response(status_code=404)
+    content = '<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256"><rect width="256" height="256" fill="none"/><line x1="48" y1="96" x2="48" y2="160" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="24"/><line x1="88" y1="32" x2="88" y2="224" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="24"/><line x1="128" y1="64" x2="128" y2="192" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="24"/><line x1="168" y1="96" x2="168" y2="160" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="24"/><line x1="208" y1="80" x2="208" y2="176" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="24"/></svg>'
+    return Response(
+        content=content,
+        media_type='image/svg+xml',
+        headers={'Cache-Control': 'public, max-age=86400'},
+    )
 
 
 @app.get('/api/track')
@@ -194,7 +261,7 @@ def _payload(track: dict) -> dict:
         'Loved': bool(
             config.PREVIOUS_LOVE and track.get('FavouriteCount', 0) >= 3
         ),
-        'PlayerctlAvailable': shutil.which('playerctl') is not None,
+        'PlayerctlAvailable': PLAYERCTL_AVAILABLE,
     }
 
 
@@ -219,11 +286,14 @@ def _publish(event: str) -> None:
             _subscribers.discard(q)
 
 
+_UNSET = object()
+
+
 async def _broadcaster() -> None:
     global _last_track_event, _last_position_event, _last_status_event
-    last_id: int | None = object()  # type: ignore[assignment]
+    last_id: object = _UNSET
     last_position_key: tuple[int, str] | None = None
-    last_status: str | None = object()  # type: ignore[assignment]
+    last_status: object = _UNSET
     status_ts = 0.0
     while True:
         now = time.monotonic()
