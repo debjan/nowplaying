@@ -30,6 +30,14 @@ _ACCENT_RE = re.compile(r'--accent\s*:\s*(#[0-9a-fA-F]{3,8})')
 app = FastAPI(title='nowplaying')
 
 
+@app.on_event('shutdown')
+async def _stop_broadcaster() -> None:
+    if _broadcaster_task is not None:
+        _broadcaster_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await _broadcaster_task
+
+
 def _playerctl_cmd(action: str) -> list[str]:
     cmd = ['playerctl']
     if config.PLAYERCTL_PLAYER:
@@ -51,11 +59,14 @@ async def run_playerctl(action: str) -> None:
 async def _player_status() -> str | None:
     """Return the playerctl status string, or None if no MPRIS player is active."""
 
-    proc = await asyncio.create_subprocess_exec(
-        *_playerctl_cmd('status'),
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.DEVNULL,
-    )
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *_playerctl_cmd('status'),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+    except FileNotFoundError:
+        return None
     stdout, _ = await proc.communicate()
     if proc.returncode != 0:
         return None
@@ -187,50 +198,106 @@ def _payload(track: dict) -> dict:
     }
 
 
+# --- Shared SSE broadcaster ---------------------------------------------------
+#
+# One background task polls the DB (and playerctl status) once, regardless of
+# how many clients are connected, and fans events out to per-client queues.
+
+_subscribers: set[asyncio.Queue[str]] = set()
+_broadcaster_task: asyncio.Task | None = None
+
+_last_track_event: str | None = None
+_last_position_event: str | None = None
+_last_status_event: str | None = None
+
+
+def _publish(event: str) -> None:
+    for q in tuple(_subscribers):
+        try:
+            q.put_nowait(event)
+        except asyncio.QueueFull:
+            _subscribers.discard(q)
+
+
+async def _broadcaster() -> None:
+    global _last_track_event, _last_position_event, _last_status_event
+    last_id: int | None = object()  # type: ignore[assignment]
+    last_position_key: tuple[int, str] | None = None
+    last_status: str | None = object()  # type: ignore[assignment]
+    status_ts = 0.0
+    while True:
+        now = time.monotonic()
+        try:
+            hist_id = await db.alatest_history_id(config.DB_PATH)
+        except (OSError, sqlite3.Error):
+            hist_id = None
+        if hist_id != last_id:
+            last_id = hist_id
+            try:
+                data = await read_track()
+            except (OSError, sqlite3.Error):
+                data = None
+            payload = (
+                json.dumps(_payload(data))
+                if data is not None
+                else json.dumps({'error': 'No track info yet'})
+            )
+            _last_track_event = 'data: ' + payload + '\n\n'
+            _publish(_last_track_event)
+            # Force a position re-emit next tick (mirrors the old per-client
+            # reset) so a new track's bar syncs immediately.
+            last_position_key = None
+        else:
+            try:
+                position = await db.aget_position(config.DB_PATH)
+            except (OSError, sqlite3.Error):
+                position = None
+            if position is not None and position != last_position_key:
+                last_position_key = position
+                _last_position_event = (
+                    'event: position\ndata: '
+                    + json.dumps({'Position': position[0]})
+                    + '\n\n'
+                )
+                _publish(_last_position_event)
+        if now - status_ts >= 3.0:
+            status_ts = now
+            status = await _player_status()
+            event = 'event: status\ndata: ' + json.dumps({'Status': status}) + '\n\n'
+            _last_status_event = event
+            if status != last_status:
+                last_status = status
+                _publish(event)
+        await asyncio.sleep(0.5)
+
+
+def _ensure_broadcaster() -> None:
+    global _broadcaster_task
+    if _broadcaster_task is None or _broadcaster_task.done():
+        _broadcaster_task = asyncio.create_task(_broadcaster())
+
+
 @app.get('/api/track/stream')
 async def track_stream() -> StreamingResponse:
     async def event_stream():
-        last: int | None = None
-        first = True
-        last_ping = 0.0
-        last_position_key: tuple[int, str] | None = None
-        while True:
-            try:
-                key = await db.alatest_history_id(config.DB_PATH)
-            except (OSError, sqlite3.Error):
-                key = None
-            now = time.monotonic()
-            if first or key != last:
-                first = False
-                last = key
+        queue: asyncio.Queue[str] = asyncio.Queue(maxsize=64)
+        _subscribers.add(queue)
+        _ensure_broadcaster()
+        try:
+            for snapshot in (
+                _last_track_event,
+                _last_position_event,
+                _last_status_event,
+            ):
+                if snapshot is not None:
+                    yield snapshot
+            while True:
                 try:
-                    data = await read_track()
-                except (OSError, sqlite3.Error):
-                    data = None
-                if data is None:
-                    payload = json.dumps({'error': 'No track info yet'})
-                else:
-                    payload = json.dumps(_payload(data))
-                yield 'data: ' + payload + '\n\n'
-                last_ping = now
-                last_position_key = None
-            else:
-                try:
-                    position = await db.aget_position(config.DB_PATH)
-                except (OSError, sqlite3.Error):
-                    position = None
-                if position is not None and position != last_position_key:
-                    last_position_key = position
-                    yield (
-                        'event: position\ndata: '
-                        + json.dumps({'Position': position[0]})
-                        + '\n\n'
-                    )
-                    last_ping = now
-            if now - last_ping >= 15:
-                yield ': ping\n\n'
-                last_ping = now
-            await asyncio.sleep(0.5)
+                    yield await asyncio.wait_for(queue.get(), timeout=15.0)
+                except TimeoutError:
+                    yield ': ping\n\n'
+        finally:
+            _subscribers.discard(queue)
 
     return StreamingResponse(event_stream(), media_type='text/event-stream')
 

@@ -463,6 +463,11 @@ class TrackMonitor:
             logger.debug('[write] skip: Artist/Title not complete yet')
             return
 
+        # Reset playback position before the slow lookups below so clients
+        # sync their progress bars immediately instead of waiting on
+        # cover/review/description fetching.
+        self.set_position(0)
+
         album = (
             None
             if self.track_info['Album'] == _DEFAULTS['Album']
@@ -523,7 +528,6 @@ class TrackMonitor:
             auto = config.SKIP_FOREVER and skip_count >= 3
             logger.debug(f'[write] skip_count={skip_count} auto_skip={auto}')
             db.record_history(self._conn, track_id, auto_skipped=auto)
-            db.set_position(self._conn, 0)
         except Exception as e:
             logger.critical(f'[Error] could not write to database: {e}')
             auto = False

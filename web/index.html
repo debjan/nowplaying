@@ -294,28 +294,23 @@
                     trackEl.appendChild(row);
                 });
                 artEl.src = data['Album Art'] || 'cover.svg';
-                
+
                 // Update playerctl availability state
                 playerctlAvailable = data.PlayerctlAvailable;
-                
-                // Hide playback controls if playerctl is not available
-                const controls = document.querySelector('.controls');
-                if (controls) {
-                    controls.hidden = !data.PlayerctlAvailable;
-                }
-                
-                // Also hide progress bar when playerctl is unavailable
-                const progress = document.getElementById('progress');
-                if (progress) {
-                    progress.hidden = !data.PlayerctlAvailable;
-                }
-                
-                // Stop playback status polling if playerctl is unavailable
-                if (!data.PlayerctlAvailable && playbackInterval) {
-                    clearInterval(playbackInterval);
-                    playbackInterval = null;
-                }
             };
+
+            source.addEventListener('status', (event) => {
+                let data;
+                try {
+                    data = JSON.parse(event.data);
+                } catch {
+                    return;
+                }
+                const active = typeof data.Status === 'string';
+                playBtn.classList.toggle('playing', data.Status === 'Playing');
+                playerctlAvailable = active;
+                controls.hidden = !active;
+            });
 
             artEl.onerror = () => {
                 if (artEl.src !== new URL('cover.svg', location.href).href) {
@@ -372,21 +367,7 @@
             try {
                 await fetch(`/api/player/${action}`, { method: 'POST' });
             } catch {
-                // ignore; playback state is reconciled by the next poll
-            }
-        }
-
-        async function refreshPlayback() {
-            try {
-                const res = await fetch('/api/player/status');
-                if (!res.ok) {
-                    playBtn.classList.remove('playing');
-                    return;
-                }
-                const data = await res.json().catch(() => ({}));
-                playBtn.classList.toggle('playing', data.status === 'Playing');
-            } catch {
-                playBtn.classList.remove('playing');
+                // ignore; playback state is reconciled by the next status event
             }
         }
 
@@ -394,10 +375,6 @@
             btn.addEventListener('click', () => sendControl(btn.dataset.action));
         });
 
-        let playbackInterval = null;
-        refreshPlayback().then(() => {
-            playbackInterval = setInterval(refreshPlayback, 3000);
-        });
         setInterval(updateProgress, 1000);
 
         source.addEventListener('position', (event) => {
