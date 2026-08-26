@@ -78,7 +78,7 @@ _EXTRA_COLUMNS: dict[str, dict[str, str]] = {
 def connect(path: str) -> sqlite3.Connection:
     """Open a WAL-mode connection with FK enforcement; creates the schema."""
 
-    conn = sqlite3.connect(path, timeout=10)
+    conn = sqlite3.connect(path, timeout=10, check_same_thread=False)
     _prepare(conn)
     return conn
 

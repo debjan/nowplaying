@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import asyncio
+import concurrent.futures
 import difflib
 import json
 import os
@@ -39,6 +40,15 @@ _DEFAULTS = {
     'Title': 'Unknown Title',
     'Duration': '0',
 }
+
+_EMOJI_RE = re.compile(
+    r'[\U0001F600-\U0001F64F]'   # Emoticons
+    r'|[\U0001F300-\U0001F5FF]'  # Symbols & Pictographs
+    r'|[\U0001F680-\U0001F6FF]'  # Transport & Map Symbols
+    r'|[\U0001F1E0-\U0001F1FF]'  # Flags
+    r'|[\u2700-\u27BF]'          # Dingbats
+    r'|[\u2600-\u26FF]'          # Miscellaneous Symbols
+)
 
 _HTTP = httpx.Client(
     timeout=10.0,
@@ -192,14 +202,34 @@ def get_youtube_image_url(video_id: str) -> str | None:
     url = (
         validate_url(f'{url_prefix}/maxresdefault.jpg') or
         validate_url(f'{url_prefix}/sddefault.jpg') or
-        validate_url(f'{url_prefix}/hddefault.jpg')
+        validate_url(f'{url_prefix}/hqdefault.jpg')
     )
     return url
 
 
-def get_release(artist: str, album: str) -> str | None:
+class RateLimiter:
+    """Keeps calls to one service under a minimum interval (thread-safe enough
+    for the monitor's single worker thread)."""
+
+    def __init__(self, min_interval: float) -> None:
+        self._min_interval = min_interval
+        self._last = 0.0
+
+    def wait(self) -> None:
+        """Sleep just long enough to respect the minimum interval."""
+        elapsed = time.monotonic() - self._last
+        if elapsed < self._min_interval:
+            time.sleep(self._min_interval - elapsed)
+        self._last = time.monotonic()
+
+
+_MB_MIN_INTERVAL = 1.1  # MusicBrainz requires <= 1 request/second
+
+
+def get_release(artist: str, album: str, mb_limiter: RateLimiter) -> str | None:
     """Return the `release_group_id` for an album, or None."""
     try:
+        mb_limiter.wait()
         response = _HTTP.get(
             'https://musicbrainz.org/ws/2/release/',
             params={
@@ -305,9 +335,10 @@ def critiquebrainz_review(release_group_id: str) -> str | None:
         logger.warning(f'[critiquebrainz] Error: {e}')
 
 
-def allmusic_review(release_group_id: str) -> str | None:
+def allmusic_review(release_group_id: str, mb_limiter: RateLimiter) -> str | None:
     """Return the AllMusic review for an album."""
     try:
+        mb_limiter.wait()
         response = _HTTP.get(
             f'https://musicbrainz.org/ws/2/release-group/{release_group_id}',
             params={'inc': 'url-rels', 'fmt': 'json'},
@@ -321,7 +352,9 @@ def allmusic_review(release_group_id: str) -> str | None:
         ]
         if not resource:
             return None
-        r = httpx.get(resource[0], headers={'User-agent': 'Mozilla/5.0'})
+        r = _HTTP.get(
+            resource[0], headers={'User-Agent': 'Mozilla/5.0'}
+        )
         logger.debug(f'[allmusic] Processing {resource[0]}')
         r.raise_for_status()
         if m := re.findall(
@@ -333,19 +366,6 @@ def allmusic_review(release_group_id: str) -> str | None:
         logger.warning(f'[allmusic] Error: {e}')
 
 
-def remove_emojis(text: str) -> str:
-    # Remove emoticons, symbols, pictographs, and transport from track titles
-    emoji_pattern = re.compile(
-        r'[\U0001F600-\U0001F64F]'   # Emoticons
-        r'|[\U0001F300-\U0001F5FF]'  # Symbols & Pictographs
-        r'|[\U0001F680-\U0001F6FF]'  # Transport & Map Symbols
-        r'|[\U0001F1E0-\U0001F1FF]'  # Flags
-        r'|[\u2700-\u27BF]'          # Dingbats
-        r'|[\u2600-\u26FF]'          # Miscellaneous Symbols
-    )
-    return emoji_pattern.sub('', text)
-
-
 class TrackMonitor:
     """Tracks the current BlueZ track; writes it out only when something changed."""
 
@@ -355,6 +375,10 @@ class TrackMonitor:
     def __init__(self) -> None:
         self.track_info = dict(_DEFAULTS)
         self._conn = db.connect(config.DB_PATH)
+        self._executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix='track'
+        )
+        self._mb_limiter = RateLimiter(_MB_MIN_INTERVAL)
         self._review_attempted: set[tuple[str, str]] = set()
         self._description_attempted: set[str] = set()
         self._cover_cache: OrderedDict[tuple[str, str], tuple[str | None, str | None, str | None, float | None]] = OrderedDict()
@@ -364,8 +388,19 @@ class TrackMonitor:
         else:
             self._last_cover_url = None
 
+    def submit(self, fn, *args) -> None:
+        """Run fn on the worker thread; failures are logged, never raised."""
+        def _safe():
+            try:
+                fn(*args)
+            except Exception:
+                logger.exception(f'[Error] worker task {getattr(fn, "__name__", fn)} failed')
+
+        self._executor.submit(_safe)
+
     def close(self) -> None:
-        """Close the held-open DB connection."""
+        """Drain and shut down the worker, then close the DB connection."""
+        self._executor.shutdown(wait=True)
         self._conn.close()
 
     def _is_complete(self) -> bool:
@@ -391,7 +426,7 @@ class TrackMonitor:
                     url = get_youtube_image_url(video_id)
             else:
                 if not release_group_id:
-                    release_group_id = get_release(artist, album)
+                    release_group_id = get_release(artist, album, self._mb_limiter)
                 if release_group_id:
                     url = fanart_cover(release_group_id) or verify_coverarchive(release_group_id)
                 if not url:
@@ -445,7 +480,7 @@ class TrackMonitor:
         prev = dict(self.track_info)
         self.track_info = dict(_DEFAULTS)
         for key, value in fields.items():
-            value = remove_emojis(value).strip()
+            value = _EMOJI_RE.sub('', value).strip()
             value = ' '.join(value.split())
             if value:
                 self.track_info[key] = value
@@ -501,7 +536,7 @@ class TrackMonitor:
 
         if release_group_id and (artist, album_name) not in self._review_attempted:
             self._review_attempted.add((artist, album_name))
-            review = allmusic_review(release_group_id)
+            review = allmusic_review(release_group_id, self._mb_limiter)
             if not review:
                 review = critiquebrainz_review(release_group_id)
 
@@ -574,7 +609,7 @@ async def _on_track_signal(bus: MessageBus, monitor: TrackMonitor, msg: Message)
         fields = _extract_track(meta)
         logger.debug(f'[dbus] Get Track -> {fields}')
         if any(key in fields for key in _SIGNAL_KEYS[:3]):
-            monitor.apply(fields)
+            monitor.submit(monitor.apply, fields)
         else:
             logger.debug('[dbus] Track metadata incomplete; nothing to apply')
     except Exception:
@@ -603,16 +638,13 @@ async def _run(bus: MessageBus, monitor: TrackMonitor) -> None:
                 except (TypeError, ValueError):
                     logger.debug(f'[dbus] unparseable Position: {changed["Position"]!r}')
                     return
-                monitor.set_position(position)
+                monitor.submit(monitor.set_position, position)
             return
         if 'Track' in changed:
             fields = _extract_track(changed['Track'].value)
             logger.debug(f'[dbus] Track changed -> {fields}')
             if any(key in fields for key in _SIGNAL_KEYS[:3]):
-                try:
-                    monitor.apply(fields)
-                except Exception:
-                    logger.exception('[Error] failed to apply signal; continuing')
+                monitor.submit(monitor.apply, fields)
                 return
         logger.debug('[dbus] Track invalidated; fetching via Get')
         asyncio.create_task(_on_track_signal(bus, monitor, msg))
