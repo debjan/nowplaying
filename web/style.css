@@ -42,7 +42,7 @@ span.centered {
     margin: 0 auto;
 }
 
-/* Layout — Card & Structure */
+/* Layout - Card & Structure */
 
 .card {
     display: flex;
@@ -196,7 +196,7 @@ span.centered {
     fill: var(--foreground-color);
 }
 
-/* Playback — Progress & Controls */
+/* Playback - Progress & Controls */
 
 .progress {
     margin-top: 1rem;

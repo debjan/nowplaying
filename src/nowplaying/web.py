@@ -30,11 +30,11 @@ COVER_SVG = WEB_DIR / 'cover.svg'
 THEMES_DIR = WEB_DIR / 'themes'
 
 PLAYERCTL_ACTIONS = frozenset({'play-pause', 'next', 'previous'})
-
-# PATH doesn't change mid-process; look this up once instead of per payload.
 PLAYERCTL_AVAILABLE = shutil.which('playerctl') is not None
 
 _ACCENT_RE = re.compile(r'--accent\s*:\s*(#[0-9a-fA-F]{3,8})')
+
+_asset_cache: dict[Path, tuple[str, bytes]] = {}
 
 
 @asynccontextmanager
@@ -44,16 +44,10 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         _broadcaster_task.cancel()
         with suppress(asyncio.CancelledError):
             await _broadcaster_task
+    await db.aclose_all()
 
 
 app = FastAPI(title='nowplaying', lifespan=lifespan)
-
-# --- Static asset serving -----------------------------------------------------
-#
-# Assets are cached in memory keyed by (mtime, size); clients revalidate via
-# ETag so unchanged files cost a 304 instead of a re-read + re-download.
-
-_asset_cache: dict[Path, tuple[str, bytes]] = {}
 
 
 async def _load_asset(path: Path) -> tuple[str, bytes] | None:
@@ -101,7 +95,6 @@ async def run_playerctl(action: str) -> None:
 
 async def _player_status() -> str | None:
     """Return the playerctl status string, or None if no MPRIS player is active."""
-
     try:
         proc = await asyncio.create_subprocess_exec(
             *_playerctl_cmd('status'),
@@ -213,7 +206,7 @@ async def cover_png() -> Response:
         await aiofiles.os.stat(path)
     except OSError:
         return Response(status_code=404)
-    # The URL is cache-busted via ?v=<hash>, so the file itself is immutable.
+
     return FileResponse(
         path,
         media_type='image/png',
@@ -265,11 +258,6 @@ def _payload(track: dict) -> dict:
     }
 
 
-# --- Shared SSE broadcaster ---------------------------------------------------
-#
-# One background task polls the DB (and playerctl status) once, regardless of
-# how many clients are connected, and fans events out to per-client queues.
-
 _subscribers: set[asyncio.Queue[str]] = set()
 _broadcaster_task: asyncio.Task | None = None
 
@@ -314,8 +302,6 @@ async def _broadcaster() -> None:
             )
             _last_track_event = 'data: ' + payload + '\n\n'
             _publish(_last_track_event)
-            # Force a position re-emit next tick (mirrors the old per-client
-            # reset) so a new track's bar syncs immediately.
             last_position_key = None
         else:
             try:

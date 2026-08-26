@@ -40,7 +40,6 @@ _DEFAULTS = {
     'Title': 'Unknown Title',
     'Duration': '0',
 }
-
 _EMOJI_RE = re.compile(
     r'[\U0001F600-\U0001F64F]'   # Emoticons
     r'|[\U0001F300-\U0001F5FF]'  # Symbols & Pictographs
@@ -49,12 +48,12 @@ _EMOJI_RE = re.compile(
     r'|[\u2700-\u27BF]'          # Dingbats
     r'|[\u2600-\u26FF]'          # Miscellaneous Symbols
 )
-
 _HTTP = httpx.Client(
     timeout=10.0,
     follow_redirects=True,
     headers={'User-Agent': 'nowplaying/1.0.0 (https://github.com/debjan/nowplaying)'},
 )
+_MB_MIN_INTERVAL = 1.1  # MusicBrainz requires <= 1 request/second
 
 logger.remove()
 logger.add(sys.stderr, level='WARNING')
@@ -208,8 +207,7 @@ def get_youtube_image_url(video_id: str) -> str | None:
 
 
 class RateLimiter:
-    """Keeps calls to one service under a minimum interval (thread-safe enough
-    for the monitor's single worker thread)."""
+    """Keeps calls to one service under a minimum interval"""
 
     def __init__(self, min_interval: float) -> None:
         self._min_interval = min_interval
@@ -221,9 +219,6 @@ class RateLimiter:
         if elapsed < self._min_interval:
             time.sleep(self._min_interval - elapsed)
         self._last = time.monotonic()
-
-
-_MB_MIN_INTERVAL = 1.1  # MusicBrainz requires <= 1 request/second
 
 
 def get_release(artist: str, album: str, mb_limiter: RateLimiter) -> str | None:
@@ -370,7 +365,7 @@ class TrackMonitor:
     """Tracks the current BlueZ track; writes it out only when something changed."""
 
     _COVER_CACHE_MAX = 256
-    _COVER_RETRY_TTL = 3600  # seconds before a failed cover lookup is retried
+    _COVER_RETRY_TTL = 3600
 
     def __init__(self) -> None:
         self.track_info = dict(_DEFAULTS)
@@ -497,11 +492,6 @@ class TrackMonitor:
         if not self._is_complete():
             logger.debug('[write] skip: Artist/Title not complete yet')
             return
-
-        # Reset playback position before the slow lookups below so clients
-        # sync their progress bars immediately instead of waiting on
-        # cover/review/description fetching.
-        self.set_position(0)
 
         album = (
             None

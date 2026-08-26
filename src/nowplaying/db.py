@@ -3,6 +3,9 @@
 import asyncio
 import sqlite3
 import time
+from collections.abc import Awaitable, Callable
+from contextlib import suppress
+from typing import TypeVar
 
 import aiosqlite
 
@@ -66,6 +69,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_albums_title_artist
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_tracks_title_album_artist
   ON tracks(title, album_id, artist_id);
+
+CREATE INDEX IF NOT EXISTS idx_history_track_id ON history(track_id);
 """
 
 # This is the single place a schema evolution is expressed - there is no
@@ -113,6 +118,7 @@ def _prepare(conn: sqlite3.Connection, attempts: int = 15) -> None:
         try:
             conn.execute('PRAGMA foreign_keys = ON')
             conn.execute('PRAGMA journal_mode = WAL')
+            conn.execute('PRAGMA synchronous = NORMAL')
             conn.executescript(SCHEMA)
             _ensure_columns(conn)
             return
@@ -130,6 +136,7 @@ async def _prepare_async(
     for attempt in range(attempts):
         try:
             await conn.execute('PRAGMA journal_mode = WAL')
+            await conn.execute('PRAGMA synchronous = NORMAL')
             await conn.executescript(SCHEMA)
             await _ensure_columns_async(conn)
             return
@@ -319,12 +326,14 @@ def record_history(
 ) -> int:
     """Insert a history row and commit; returns the new `history.id`."""
 
-    conn.execute(
+    cur = conn.execute(
         'INSERT INTO history(track_id, auto_skipped) VALUES (?, ?)',
         (track_id, int(auto_skipped)),
     )
+    row_id = cur.lastrowid
+    assert row_id is not None
     conn.commit()
-    return conn.execute('SELECT last_insert_rowid()').fetchone()[0]
+    return row_id
 
 
 def skip_count(conn: sqlite3.Connection, track_id: int) -> int:
@@ -376,8 +385,10 @@ def latest_history_id(conn: sqlite3.Connection) -> int | None:
 
 # --- Async layer (aiosqlite) for the web server ------------------------------
 
-_ensured_paths: set[str] = set()
-_ensure_lock = asyncio.Lock()
+_conns: dict[str, aiosqlite.Connection] = {}
+_conn_lock = asyncio.Lock()
+
+_T = TypeVar('_T')
 
 _CURRENT_SQL = """
 SELECT a.title AS Artist, al.title AS Album, t.title AS Title,
@@ -394,30 +405,55 @@ ORDER BY h.id DESC
 LIMIT 1
 """
 
-async def _ensure_schema(db_path: str) -> None:
-    """Create/migrate the DB once per process so the web can run standalone."""
+async def _adb(db_path: str) -> aiosqlite.Connection:
+    """Return the shared long-lived connection for `db_path`, creating it once."""
 
-    if db_path in _ensured_paths:
-        return
-    async with _ensure_lock:
-        if db_path in _ensured_paths:
-            return
-        async with aiosqlite.connect(db_path) as conn:
-            await _prepare_async(conn)
-        _ensured_paths.add(db_path)
+    conn = _conns.get(db_path)
+    if conn is not None:
+        return conn
+    async with _conn_lock:
+        if db_path in _conns:
+            return _conns[db_path]
+        fresh = await aiosqlite.connect(db_path, timeout=10)
+        try:
+            await _prepare_async(fresh)
+        except BaseException:
+            with suppress(Exception):
+                await fresh.close()
+            raise
+        _conns[db_path] = fresh
+        return fresh
 
 
-async def _aioconnect(db_path: str) -> aiosqlite.Connection:
-    await _ensure_schema(db_path)
-    return aiosqlite.connect(db_path)
+async def _invalidate(db_path: str) -> None:
+    """Drop the cached connection so the next call reconnects."""
+
+    async with _conn_lock:
+        conn = _conns.pop(db_path, None)
+    if conn is not None:
+        with suppress(Exception):
+            await conn.close()
+
+
+async def _acall(
+    db_path: str, op: Callable[[aiosqlite.Connection], Awaitable[_T]]
+) -> _T:
+    """Run `op(conn)` on the shared connection; reconnect after a failure."""
+
+    try:
+        return await op(await _adb(db_path))
+    except (sqlite3.Error, OSError):
+        await _invalidate(db_path)
+        raise
 
 
 async def _afetchone(db_path: str, sql: str, params: tuple = ()) -> tuple | None:
-    conn = await _aioconnect(db_path)
-    async with conn:
+    async def op(conn: aiosqlite.Connection) -> tuple | None:
         cur = await conn.execute(sql, params)
         row = await cur.fetchone()
         return tuple(row) if row is not None else None
+
+    return await _acall(db_path, op)
 
 
 async def alatest_history_id(db_path: str) -> int | None:
@@ -455,8 +491,7 @@ async def aget_position(db_path: str) -> tuple[int, str] | None:
 
 
 async def aincrement_skip(db_path: str, track_id: int) -> None:
-    conn = await _aioconnect(db_path)
-    async with conn:
+    async def op(conn: aiosqlite.Connection) -> None:
         await conn.execute(
             """
             INSERT INTO skips(track_id, count) VALUES (?, 1)
@@ -466,10 +501,11 @@ async def aincrement_skip(db_path: str, track_id: int) -> None:
         )
         await conn.commit()
 
+    await _acall(db_path, op)
+
 
 async def aincrement_favourite(db_path: str, track_id: int) -> None:
-    conn = await _aioconnect(db_path)
-    async with conn:
+    async def op(conn: aiosqlite.Connection) -> None:
         await conn.execute(
             """
             INSERT INTO favourites(track_id, count) VALUES (?, 1)
@@ -478,3 +514,16 @@ async def aincrement_favourite(db_path: str, track_id: int) -> None:
             (track_id,),
         )
         await conn.commit()
+
+    await _acall(db_path, op)
+
+
+async def aclose_all() -> None:
+    """Close every cached connection; called at app shutdown."""
+
+    async with _conn_lock:
+        conns = list(_conns.values())
+        _conns.clear()
+    for conn in conns:
+        with suppress(Exception):
+            await conn.close()
