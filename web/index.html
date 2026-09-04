@@ -40,7 +40,7 @@
                     <div id="track" class="track-text">Loading...</div>
                 </div>
                 <div class="spacer"></div>
-                <div class="progress" id="progress" hidden><div class="progress-fill" id="progress-fill"></div></div>
+                <div class="progress" id="progress" hidden><div class="progress-fill" id="progress-fill"></div><div class="progress-tip" id="progress-tip"></div></div>
                 <div class="controls">
                     <button class="btn" data-action="previous" title="Previous">
                         <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 256 256">
@@ -352,6 +352,19 @@
         let lastRenderKey = null;
         const progressBar = document.getElementById('progress');
         const progressFill = document.getElementById('progress-fill');
+        const progressTip = document.getElementById('progress-tip');
+
+        function formatMs(ms) {
+            const totalSec = Math.max(0, Math.floor(ms / 1000));
+            const m = Math.floor(totalSec / 60);
+            const s = String(totalSec % 60).padStart(2, '0');
+            return `${m}:${s}`;
+        }
+
+        function updateProgressTip() {
+            const label = durationMs ? `${formatMs(positionMs)} / ${formatMs(durationMs)}` : '';
+            progressTip.textContent = label;
+        }
 
         function updateProgress() {
             if (!durationMs || !playerctlAvailable || !positionSynced) {
@@ -368,6 +381,7 @@
                 positionMs = 0;
             }
             progressFill.style.width = (Math.min(1, positionMs / durationMs) * 100).toFixed(2) + '%';
+            updateProgressTip();
         }
 
         async function sendControl(action) {

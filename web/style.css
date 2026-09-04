@@ -199,13 +199,45 @@ span.centered {
 /* Playback - Progress & Controls */
 
 .progress {
+    position: relative;
     margin-top: 1rem;
     margin-bottom: 1rem;
     height: 1px;
     background: var(--shadow-color);
-    overflow: hidden;
+    overflow: visible;
     width: 100%;
     flex-shrink: 0;
+}
+
+/* Thicker invisible hover area so the 1px bar is easy to hover. */
+.progress::before {
+    content: '';
+    position: absolute;
+    inset: -10px 0;
+}
+
+.progress-tip {
+    position: absolute;
+    left: 50%;
+    bottom: calc(100% + 8px);
+    transform: translateX(-50%);
+    background: var(--background-color);
+    border: 1px solid var(--shadow-color);
+    color: var(--foreground-color);
+    font-size: 0.75rem;
+    line-height: 1;
+    white-space: nowrap;
+    padding: 0.3rem 0.5rem;
+    border-radius: 6px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s ease;
+}
+
+@media (hover: hover) {
+    .progress:hover .progress-tip:not(:empty) {
+        opacity: 1;
+    }
 }
 
 .progress[hidden] {
