@@ -34,6 +34,8 @@ _MATCH_RULE = (
 
 _SIGNAL_KEYS = ('Artist', 'Album', 'Title', 'Duration')
 
+_POSITION_POLL_INTERVAL = 10.0
+
 _DEFAULTS = {
     'Artist': 'Unknown Artist',
     'Album': 'Unknown Album',
@@ -370,6 +372,8 @@ class TrackMonitor:
     def __init__(self) -> None:
         self.track_info = dict(_DEFAULTS)
         self._conn = db.connect(config.DB_PATH)
+        self.player_path: str | None = None
+        self.player_service: str | None = None
         self._executor = concurrent.futures.ThreadPoolExecutor(
             max_workers=1, thread_name_prefix='track'
         )
@@ -464,8 +468,8 @@ class TrackMonitor:
     def set_position(self, position_ms: int) -> None:
         """Persist a seek/position update (Position-only signal, no history row)."""
         try:
-            db.set_position(self._conn, position_ms)
-            logger.debug(f'[position] {position_ms} ms')
+            if db.set_position(self._conn, position_ms):
+                logger.debug(f'[position] {position_ms} ms')
         except Exception as e:
             logger.warning(f'[Error] could not store position: {e}')
 
@@ -553,6 +557,7 @@ class TrackMonitor:
             auto = config.SKIP_FOREVER and skip_count >= 3
             logger.debug(f'[write] skip_count={skip_count} auto_skip={auto}')
             db.record_history(self._conn, track_id, auto_skipped=auto)
+            db.set_position(self._conn, 0)
         except Exception as e:
             logger.critical(f'[Error] could not write to database: {e}')
             auto = False
@@ -606,6 +611,42 @@ async def _on_track_signal(bus: MessageBus, monitor: TrackMonitor, msg: Message)
         logger.exception('[Error] failed to fetch track properties; continuing')
 
 
+async def _poll_position(bus: MessageBus, monitor: TrackMonitor) -> None:
+    """Poll MediaPlayer1 `Position` every 10s.
+
+    Some devices (e.g. phones over AVRCP) never emit Position signals, so the
+    stored position would otherwise go stale. The property itself is live.
+    Writes go through set_position(), which skips unchanged values.
+    """
+
+    while True:
+        await asyncio.sleep(_POSITION_POLL_INTERVAL)
+        path, service = monitor.player_path, monitor.player_service
+        if path is None or service is None:
+            continue
+        try:
+            reply = await bus.call(
+                Message(
+                    destination=service,
+                    path=path,
+                    interface='org.freedesktop.DBus.Properties',
+                    member='Get',
+                    signature='ss',
+                    body=['org.bluez.MediaPlayer1', 'Position'],
+                )
+            )
+        except Exception:
+            logger.debug('[dbus] poll Position call failed; retrying next interval')
+            continue
+        if reply is None or reply.message_type != MessageType.METHOD_RETURN:
+            continue
+        try:
+            position = int(reply.body[0].value)
+        except (TypeError, ValueError, IndexError, AttributeError):
+            continue
+        monitor.submit(monitor.set_position, position)
+
+
 async def _run(bus: MessageBus, monitor: TrackMonitor) -> None:
     """Register the signal match and run until the bus disconnects."""
 
@@ -618,6 +659,8 @@ async def _run(bus: MessageBus, monitor: TrackMonitor) -> None:
             return
         if not msg.body or msg.body[0] != 'org.bluez.MediaPlayer1':
             return
+        monitor.player_path = msg.path
+        monitor.player_service = msg.sender
         changed = msg.body[1]
         invalidated = msg.body[2] if len(msg.body) > 2 else []
         if 'Track' not in changed and 'Track' not in invalidated:
@@ -655,7 +698,13 @@ async def _run(bus: MessageBus, monitor: TrackMonitor) -> None:
         logger.error(f'[dbus] AddMatch failed: {e} - no signals will be delivered')
     else:
         logger.debug(f'[dbus] AddMatch registered: {_MATCH_RULE}')
-    await bus.wait_for_disconnect()
+    poll_task = asyncio.create_task(_poll_position(bus, monitor))
+    try:
+        await bus.wait_for_disconnect()
+    finally:
+        poll_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await poll_task
 
 
 def main():

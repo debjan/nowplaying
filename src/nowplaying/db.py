@@ -363,9 +363,12 @@ def increment_favourite(conn: sqlite3.Connection, track_id: int) -> None:
     conn.commit()
 
 
-def set_position(conn: sqlite3.Connection, position_ms: int) -> None:
-    """Upsert the single playback-position row and commit."""
+def set_position(conn: sqlite3.Connection, position_ms: int) -> bool:
+    """Upsert the single playback-position row; return True if the value changed."""
 
+    row = conn.execute('SELECT position_ms FROM playback WHERE id = 1').fetchone()
+    if row is not None and int(row[0]) == position_ms:
+        return False
     conn.execute(
         """
         INSERT INTO playback(id, position_ms, updated_at)
@@ -377,6 +380,7 @@ def set_position(conn: sqlite3.Connection, position_ms: int) -> None:
         (position_ms,),
     )
     conn.commit()
+    return True
 
 
 def latest_history_id(conn: sqlite3.Connection) -> int | None:

@@ -393,5 +393,17 @@ async def player_status() -> dict:
     return {'status': status}
 
 
+@app.get('/api/player/position')
+async def player_position() -> dict:
+    """Return the BlueZ-polled playback position in ms (see monitor poll loop)."""
+    try:
+        stored = await db.aget_position(config.DB_PATH)
+    except (OSError, sqlite3.Error):
+        raise HTTPException(status_code=500, detail='Position unavailable') from None
+    if stored is None:
+        raise HTTPException(status_code=404, detail='No position yet') from None
+    return {'Position': stored[0]}
+
+
 if __name__ == '__main__':
     uvicorn.run(app, host=config.HOST, port=config.PORT)

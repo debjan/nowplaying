@@ -241,6 +241,10 @@
                 if (id !== lastTrackId) {
                     if (lastTrackId === null) {
                         progressActive = false;
+                        // Fresh page load: SSE only replays a position event if one
+                        // was recently published, so pull the stored position
+                        // directly instead of starting at 0.
+                        fetchPosition();
                     } else {
                         progressActive = true;
                         positionMs = 0;
@@ -382,6 +386,21 @@
             }
             progressFill.style.width = (Math.min(1, positionMs / durationMs) * 100).toFixed(2) + '%';
             updateProgressTip();
+        }
+
+        async function fetchPosition() {
+            try {
+                const res = await fetch('/api/player/position');
+                if (!res.ok) return;
+                const data = await res.json();
+                if (typeof data.Position !== 'number') return;
+                positionMs = data.Position;
+                lastTickTs = Date.now();
+                progressActive = true;
+                positionSynced = true;
+            } catch {
+                // ignore; SSE position events remain the live source
+            }
         }
 
         async function sendControl(action) {
