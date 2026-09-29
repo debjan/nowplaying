@@ -1,6 +1,6 @@
-"""nowplaying - Bluetooth now-playing dashboard.
+"""nowplaying - track now-playing dashboard (Bluetooth + local players).
 
-- ``nowplaying.monitor`` - the BlueZ D-Bus producer (``main()``).
+- ``nowplaying.monitor`` - the D-Bus producer (BlueZ + MPRIS, ``main()``).
 - ``nowplaying.web``   - the FastAPI consumer / web server.
 - ``nowplaying.config`` / ``nowplaying.db`` - configuration and persistence.
 """

@@ -8,7 +8,7 @@
     <script>
         (function () {
             const saved = localStorage.getItem('theme');
-            if (saved) {
+            if (saved && /^[a-z0-9-]+$/i.test(saved)) {
                 const link = document.createElement('link');
                 link.rel = 'stylesheet';
                 link.href = `themes/${saved}.css`;
@@ -381,8 +381,9 @@
                 positionMs += now - lastTickTs;
             }
             lastTickTs = now;
-            if (positionMs / durationMs >= 1) {
-                positionMs = 0;
+            if (positionMs >= durationMs) {
+                positionMs = durationMs;
+                progressActive = false;
             }
             progressFill.style.width = (Math.min(1, positionMs / durationMs) * 100).toFixed(2) + '%';
             updateProgressTip();

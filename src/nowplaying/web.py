@@ -30,7 +30,12 @@ COVER_SVG = WEB_DIR / 'cover.svg'
 THEMES_DIR = WEB_DIR / 'themes'
 
 PLAYERCTL_ACTIONS = frozenset({'play-pause', 'next', 'previous'})
-PLAYERCTL_AVAILABLE = shutil.which('playerctl') is not None
+
+if config.SOURCE == 'windows':
+    from nowplaying import windows_control
+    PLAYERCTL_AVAILABLE = True
+else:
+    PLAYERCTL_AVAILABLE = shutil.which('playerctl') is not None
 
 _ACCENT_RE = re.compile(r'--accent\s*:\s*(#[0-9a-fA-F]{3,8})')
 
@@ -83,6 +88,9 @@ def _playerctl_cmd(action: str) -> list[str]:
 
 
 async def run_playerctl(action: str) -> None:
+    if config.SOURCE == 'windows':
+        await windows_control.control(action)
+        return
     proc = await asyncio.create_subprocess_exec(
         *_playerctl_cmd(action),
         stdout=asyncio.subprocess.DEVNULL,
@@ -94,7 +102,9 @@ async def run_playerctl(action: str) -> None:
 
 
 async def _player_status() -> str | None:
-    """Return the playerctl status string, or None if no MPRIS player is active."""
+    """Return the playback status string, or None if no player is active."""
+    if config.SOURCE == 'windows':
+        return await windows_control.get_status()
     try:
         proc = await asyncio.create_subprocess_exec(
             *_playerctl_cmd('status'),
@@ -147,7 +157,12 @@ async def css(request: Request) -> Response:
 
 @app.get('/themes/{filename}')
 async def theme(filename: str, request: Request) -> Response:
-    if '/' in filename or filename.startswith('.'):
+    if (
+        Path(filename).name != filename
+        or not filename.endswith('.css')
+        or filename.startswith('.')
+        or '\\' in filename
+    ):
         raise HTTPException(status_code=400, detail='Invalid theme filename')
     loaded = await _load_asset(THEMES_DIR / filename)
     if loaded is None:
@@ -260,6 +275,7 @@ def _payload(track: dict) -> dict:
 
 _subscribers: set[asyncio.Queue[str]] = set()
 _broadcaster_task: asyncio.Task | None = None
+_broadcaster_lock = asyncio.Lock()
 
 _last_track_event: str | None = None
 _last_position_event: str | None = None
@@ -318,7 +334,10 @@ async def _broadcaster() -> None:
                 _publish(_last_position_event)
         if now - status_ts >= 3.0:
             status_ts = now
-            status = await _player_status()
+            try:
+                status = await _player_status()
+            except (OSError, RuntimeError):
+                status = None
             event = 'event: status\ndata: ' + json.dumps({'Status': status}) + '\n\n'
             _last_status_event = event
             if status != last_status:
@@ -327,10 +346,11 @@ async def _broadcaster() -> None:
         await asyncio.sleep(0.5)
 
 
-def _ensure_broadcaster() -> None:
+async def _ensure_broadcaster() -> None:
     global _broadcaster_task
-    if _broadcaster_task is None or _broadcaster_task.done():
-        _broadcaster_task = asyncio.create_task(_broadcaster())
+    async with _broadcaster_lock:
+        if _broadcaster_task is None or _broadcaster_task.done():
+            _broadcaster_task = asyncio.create_task(_broadcaster())
 
 
 @app.get('/api/track/stream')
@@ -338,7 +358,7 @@ async def track_stream() -> StreamingResponse:
     async def event_stream():
         queue: asyncio.Queue[str] = asyncio.Queue(maxsize=64)
         _subscribers.add(queue)
-        _ensure_broadcaster()
+        await _ensure_broadcaster()
         try:
             for snapshot in (
                 _last_track_event,
@@ -355,7 +375,15 @@ async def track_stream() -> StreamingResponse:
         finally:
             _subscribers.discard(queue)
 
-    return StreamingResponse(event_stream(), media_type='text/event-stream')
+    return StreamingResponse(
+        event_stream(),
+        media_type='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'X-Accel-Buffering': 'no',
+        },
+    )
 
 
 @app.post('/api/player/{action}')
@@ -395,7 +423,7 @@ async def player_status() -> dict:
 
 @app.get('/api/player/position')
 async def player_position() -> dict:
-    """Return the BlueZ-polled playback position in ms (see monitor poll loop)."""
+    """Return the D-Bus-polled playback position in ms (see monitor poll loops)."""
     try:
         stored = await db.aget_position(config.DB_PATH)
     except (OSError, sqlite3.Error):
@@ -405,5 +433,11 @@ async def player_position() -> dict:
     return {'Position': stored[0]}
 
 
-if __name__ == '__main__':
+def main() -> None:
+    """Serve the app on the configured host/port (config.HOST/PORT)."""
+
     uvicorn.run(app, host=config.HOST, port=config.PORT)
+
+
+if __name__ == '__main__':
+    main()

@@ -1,7 +1,7 @@
 [project]
 name = "nowplaying"
 version = "0.1.0"
-description = "Bluetooth now-playing dashboard with live server-sent-event updates"
+description = "now-playing dashboard with live server-sent-event updates and control"
 readme = "README.md"
 authors = [
     { name = "debjan" }
@@ -10,7 +10,6 @@ requires-python = ">=3.11"
 dependencies = [
     "aiofiles>=25.1.0",
     "aiosqlite>=0.20.0",
-    "dbus-next>=0.2.3",
     "fastapi>=0.141.1",
     "httpx>=0.28.1",
     "loguru>=0.7.3",
@@ -19,8 +18,24 @@ dependencies = [
     "uvicorn>=0.52.1",
 ]
 
+[project.optional-dependencies]
+dbus = ["dbus-next>=0.2.3; sys_platform != 'win32'"]
+windows = [
+    "winrt-Windows.Media.Control>=3.2.1; sys_platform == 'win32'",
+    "winrt-Windows.Foundation>=3.2.1; sys_platform == 'win32'",
+    "winrt-Windows.Foundation.Collections>=3.2.1; sys_platform == 'win32'",
+    "winrt-Windows.Media>=3.2.1; sys_platform == 'win32'",
+    "winrt-Windows.Storage>=3.2.1; sys_platform == 'win32'",
+    "winrt-Windows.Storage.Streams>=3.2.1; sys_platform == 'win32'",
+    "winrt-runtime>=3.2.1; sys_platform == 'win32'",
+]
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
 [project.scripts]
 nowplaying = "nowplaying.monitor:main"
+nowplaying-web = "nowplaying.web:main"
 
 [build-system]
 requires = ["uv_build>=0.12.2,<0.13.0"]
@@ -28,3 +43,5 @@ build-backend = "uv_build"
 
 [tool.ruff.lint]
 ignore = ["S", "DTZ", 'BLE001', "SIM"]
+
+

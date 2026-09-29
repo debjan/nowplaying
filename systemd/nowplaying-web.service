@@ -9,7 +9,7 @@ Wants=nowplaying.service
 [Service]
 Type=simple
 WorkingDirectory=/{$PROJECTS}/nowplaying
-ExecStart=/{$HOME}/.local/bin/uv run uvicorn nowplaying.web:app
+ExecStart=/{$HOME}/.local/bin/uv run nowplaying-web
 Restart=always
 RestartSec=3
 Environment=PYTHONUNBUFFERED=1

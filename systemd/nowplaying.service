@@ -2,7 +2,7 @@
 # Replace {$PROJECTS} with parent location of nowplaying code
 
 [Unit]
-Description=Bluetooth Track Metadata Logger
+Description=Now Playing Track Monitor (any media app)
 After=bluetooth.service
 
 [Service]

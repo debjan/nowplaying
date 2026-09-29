@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import asyncio
+import atexit
 import concurrent.futures
 import difflib
 import json
@@ -9,16 +10,13 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from collections import OrderedDict
 from contextlib import suppress
 from io import BytesIO
 
 import httpx
-from dbus_next import Message
-from dbus_next.aio import MessageBus
-from dbus_next.constants import BusType, MessageType
-from dbus_next.errors import DBusError
 from loguru import logger
 from PIL import Image, ImageChops
 
@@ -26,15 +24,6 @@ from nowplaying import config, db
 
 COVER_FILE = config.COVER_FILE
 COVER_URL = config.COVER_URL
-
-_MATCH_RULE = (
-    "type='signal',interface='org.freedesktop.DBus.Properties',"
-    "member='PropertiesChanged',arg0='org.bluez.MediaPlayer1'"
-)
-
-_SIGNAL_KEYS = ('Artist', 'Album', 'Title', 'Duration')
-
-_POSITION_POLL_INTERVAL = 10.0
 
 _DEFAULTS = {
     'Artist': 'Unknown Artist',
@@ -55,7 +44,9 @@ _HTTP = httpx.Client(
     follow_redirects=True,
     headers={'User-Agent': 'nowplaying/1.0.0 (https://github.com/debjan/nowplaying)'},
 )
+atexit.register(_HTTP.close)
 _MB_MIN_INTERVAL = 1.1  # MusicBrainz requires <= 1 request/second
+_MAX_COVER_BYTES = 10 * 1024 * 1024
 
 logger.remove()
 logger.add(sys.stderr, level='WARNING')
@@ -162,10 +153,24 @@ def auto_crop(img: Image.Image) -> Image.Image:
 def download_cover(url: str, trim: bool = True) -> str | None:
     """Download a thumbnail into COVER_FILE; optionally trim black borders."""
     try:
-        img = Image.open(BytesIO(_HTTP.get(url).content))
+        resp = _HTTP.get(url)
+        resp.raise_for_status()
+        if len(resp.content) > _MAX_COVER_BYTES:
+            logger.warning('[cover] image too large; skipping art')
+            return None
+        img = Image.open(BytesIO(resp.content))
         if trim:
             img = auto_crop(img)
-        img.save(COVER_FILE)
+        fd, tmp = tempfile.mkstemp(
+            dir=os.path.dirname(COVER_FILE) or '.', suffix='.png'
+        )
+        try:
+            with os.fdopen(fd, 'wb') as f:
+                img.save(f, format='PNG')
+            os.replace(tmp, COVER_FILE)
+        finally:
+            with suppress(OSError):
+                os.remove(tmp)
     except Exception as e:
         logger.error(f'[Error] could not save album art: {e}')
         return None
@@ -178,10 +183,12 @@ def yt_dlp(artist: str, album: str, title: str) -> str | None:
     if not (shutil.which("yt-dlp") and config.YT_DLP):
         return None
     query = f'ytsearch1:{artist},{album},{title}'
-    cmd = ['nice', '-n', '15', 'yt-dlp', query, '--flat-playlist', '--dump-single-json', '--playlist-items', '1']
+    cmd = ['yt-dlp', query, '--flat-playlist', '--dump-single-json', '--playlist-items', '1']
+    if sys.platform != 'win32':
+        cmd = ['nice', '-n', '15'] + cmd
     logger.debug(f'[yt-dlp] {query}')
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=15)
         js = json.loads(proc.stdout)
     except Exception as e:
         logger.warning(f'[Error] album art lookup failed: {e}')
@@ -364,12 +371,13 @@ def allmusic_review(release_group_id: str, mb_limiter: RateLimiter) -> str | Non
 
 
 class TrackMonitor:
-    """Tracks the current BlueZ track; writes it out only when something changed."""
+    """Tracks the current track (BlueZ and/or MPRIS); writes it out only when something changed."""
 
     _COVER_CACHE_MAX = 256
     _COVER_RETRY_TTL = 3600
 
-    def __init__(self) -> None:
+    def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
+        self._loop = loop
         self.track_info = dict(_DEFAULTS)
         self._conn = db.connect(config.DB_PATH)
         self.player_path: str | None = None
@@ -380,7 +388,7 @@ class TrackMonitor:
         self._mb_limiter = RateLimiter(_MB_MIN_INTERVAL)
         self._review_attempted: set[tuple[str, str]] = set()
         self._description_attempted: set[str] = set()
-        self._cover_cache: OrderedDict[tuple[str, str], tuple[str | None, str | None, str | None, float | None]] = OrderedDict()
+        self._cover_cache: OrderedDict[tuple[str, str, str], tuple[str | None, str | None, str | None, float | None]] = OrderedDict()
 
         if os.path.exists(COVER_FILE):
             self._last_cover_url = db.latest_cover_url(self._conn)
@@ -414,7 +422,7 @@ class TrackMonitor:
         """Return the raw thumbnail URL, MusicBrainz release-group id, and YouTube video id."""
 
         release_group_id = db.release_for(self._conn, artist, album)
-        query = (artist, title)
+        query = (artist, album, title)
         if query not in self._cover_cache:
             if len(self._cover_cache) >= self._COVER_CACHE_MAX:
                 self._cover_cache.popitem(last=False)
@@ -439,19 +447,38 @@ class TrackMonitor:
         if not url:
             if failed_at is not None and time.monotonic() - failed_at >= self._COVER_RETRY_TTL:
                 self._cover_cache.pop(query, None)
-            return None, None, None
+            return None, release_group_id, video_id
 
         if url != self._last_cover_url:
             logger.debug(f'[cover] downloading new art: {url}')
             if download_cover(url, trim=url.startswith('https://img.youtube')) is None:
                 logger.debug('[cover] download failed; skipping art')
-                return None, None, None
+                return None, release_group_id, video_id
             self._last_cover_url = url
         return url, release_group_id, video_id
 
-    def _auto_skip(self) -> None:
-        """Best-effort `playerctl next`; a failure just means the track plays."""
+    @staticmethod
+    def _log_future(fut: concurrent.futures.Future) -> None:
+        """Log background control failures; never raise."""
+        try:
+            fut.result()
+        except Exception:
+            logger.debug('[auto-skip] windows control failed')
 
+    def _auto_skip(self) -> None:
+        """Best-effort skip; a failure just means the track plays."""
+
+        if config.SOURCE == 'windows':
+            from nowplaying import windows_control
+
+            try:
+                fut = asyncio.run_coroutine_threadsafe(
+                    windows_control.control('next'), self._loop
+                )
+                fut.add_done_callback(self._log_future)
+            except Exception:
+                logger.debug('[auto-skip] failed to schedule windows control')
+            return
         cmd = ['playerctl']
         if config.PLAYERCTL_PLAYER:
             cmd += ['--player', config.PLAYERCTL_PLAYER]
@@ -468,8 +495,7 @@ class TrackMonitor:
     def set_position(self, position_ms: int) -> None:
         """Persist a seek/position update (Position-only signal, no history row)."""
         try:
-            if db.set_position(self._conn, position_ms):
-                logger.debug(f'[position] {position_ms} ms')
+            db.set_position(self._conn, position_ms)
         except Exception as e:
             logger.warning(f'[Error] could not store position: {e}')
 
@@ -569,155 +595,37 @@ class TrackMonitor:
             logger.info(f"[Updated Track] {artist} - {album_name} - {self.track_info['Title']}")
 
 
-def _extract_track(meta: dict) -> dict[str, str]:
-    """Extract our fields from a BlueZ MediaPlayer1 `Track` dict (a{sv})."""
-
-    fields = {}
-    for key in _SIGNAL_KEYS:
-        value = meta.get(key)
-        if value is not None:
-            fields[key] = str(value.value)
-    return fields
-
-
-async def _on_track_signal(bus: MessageBus, monitor: TrackMonitor, msg: Message) -> None:
-    """Fetch the MediaPlayer1 `Track` property and apply its metadata."""
-
-    try:
-        reply = await bus.call(
-            Message(
-                destination=msg.sender,
-                path=msg.path,
-                interface='org.freedesktop.DBus.Properties',
-                member='Get',
-                signature='ss',
-                body=['org.bluez.MediaPlayer1', 'Track'],
-            )
-        )
-        if reply is None:
-            logger.debug('[dbus] Get Track returned no reply')
-            return
-        if reply.message_type != MessageType.METHOD_RETURN:
-            logger.debug(f'[dbus] Get Track error: {reply.error_name}')
-            return
-        meta = reply.body[0].value
-        fields = _extract_track(meta)
-        logger.debug(f'[dbus] Get Track -> {fields}')
-        if any(key in fields for key in _SIGNAL_KEYS[:3]):
-            monitor.submit(monitor.apply, fields)
-        else:
-            logger.debug('[dbus] Track metadata incomplete; nothing to apply')
-    except Exception:
-        logger.exception('[Error] failed to fetch track properties; continuing')
-
-
-async def _poll_position(bus: MessageBus, monitor: TrackMonitor) -> None:
-    """Poll MediaPlayer1 `Position` every 10s.
-
-    Some devices (e.g. phones over AVRCP) never emit Position signals, so the
-    stored position would otherwise go stale. The property itself is live.
-    Writes go through set_position(), which skips unchanged values.
-    """
-
-    while True:
-        await asyncio.sleep(_POSITION_POLL_INTERVAL)
-        path, service = monitor.player_path, monitor.player_service
-        if path is None or service is None:
-            continue
-        try:
-            reply = await bus.call(
-                Message(
-                    destination=service,
-                    path=path,
-                    interface='org.freedesktop.DBus.Properties',
-                    member='Get',
-                    signature='ss',
-                    body=['org.bluez.MediaPlayer1', 'Position'],
-                )
-            )
-        except Exception:
-            logger.debug('[dbus] poll Position call failed; retrying next interval')
-            continue
-        if reply is None or reply.message_type != MessageType.METHOD_RETURN:
-            continue
-        try:
-            position = int(reply.body[0].value)
-        except (TypeError, ValueError, IndexError, AttributeError):
-            continue
-        monitor.submit(monitor.set_position, position)
-
-
-async def _run(bus: MessageBus, monitor: TrackMonitor) -> None:
-    """Register the signal match and run until the bus disconnects."""
-
-    def handler(msg: Message) -> None:
-        if (
-            msg.message_type != MessageType.SIGNAL
-            or msg.interface != 'org.freedesktop.DBus.Properties'
-            or msg.member != 'PropertiesChanged'
-        ):
-            return
-        if not msg.body or msg.body[0] != 'org.bluez.MediaPlayer1':
-            return
-        monitor.player_path = msg.path
-        monitor.player_service = msg.sender
-        changed = msg.body[1]
-        invalidated = msg.body[2] if len(msg.body) > 2 else []
-        if 'Track' not in changed and 'Track' not in invalidated:
-            # Position-only signal (seek / player tick): persist it for SSE.
-            if 'Position' in changed:
-                try:
-                    position = int(changed['Position'].value)
-                except (TypeError, ValueError):
-                    logger.debug(f'[dbus] unparseable Position: {changed["Position"]!r}')
-                    return
-                monitor.submit(monitor.set_position, position)
-            return
-        if 'Track' in changed:
-            fields = _extract_track(changed['Track'].value)
-            logger.debug(f'[dbus] Track changed -> {fields}')
-            if any(key in fields for key in _SIGNAL_KEYS[:3]):
-                monitor.submit(monitor.apply, fields)
-                return
-        logger.debug('[dbus] Track invalidated; fetching via Get')
-        asyncio.create_task(_on_track_signal(bus, monitor, msg))
-
-    bus.add_message_handler(handler)
-    try:
-        await bus.call(
-            Message(
-                destination='org.freedesktop.DBus',
-                path='/org/freedesktop/DBus',
-                interface='org.freedesktop.DBus',
-                member='AddMatch',
-                signature='s',
-                body=[_MATCH_RULE],
-            )
-        )
-    except DBusError as e:
-        logger.error(f'[dbus] AddMatch failed: {e} - no signals will be delivered')
-    else:
-        logger.debug(f'[dbus] AddMatch registered: {_MATCH_RULE}')
-    poll_task = asyncio.create_task(_poll_position(bus, monitor))
-    try:
-        await bus.wait_for_disconnect()
-    finally:
-        poll_task.cancel()
-        with suppress(asyncio.CancelledError):
-            await poll_task
-
-
 def main():
     async def _amain() -> None:
-        bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
-        monitor = TrackMonitor()
+        loop = asyncio.get_running_loop()
+        monitor = TrackMonitor(loop=loop)
         logger.debug(f'DB: {config.DB_PATH} | cover: {config.COVER_FILE}')
-        logger.debug('Monitoring D-Bus passively for track metadata...')
-        try:
-            await _run(bus, monitor)
-        finally:
-            monitor.close()
-            bus.disconnect()
+        logger.debug(f'Source: {config.SOURCE}')
+
+        if config.SOURCE == 'windows':
+            from nowplaying.sources.windows_source import WindowsSource
+            source = WindowsSource(monitor, loop)
+            try:
+                await source.run()
+            finally:
+                monitor.close()
+        else:
+            from nowplaying.sources.dbus_source import DbusSource
+            from nowplaying.sources.mpris_source import MprisSource
+
+            async def _run_source(source, name: str) -> None:
+                try:
+                    await source.run()
+                except Exception:
+                    logger.exception(f'[Error] {name} source terminated unexpectedly')
+
+            try:
+                await asyncio.gather(
+                    _run_source(DbusSource(monitor, loop), 'BlueZ'),
+                    _run_source(MprisSource(monitor, loop), 'MPRIS'),
+                )
+            finally:
+                monitor.close()
 
     try:
         asyncio.run(_amain())
