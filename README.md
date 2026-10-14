@@ -72,7 +72,7 @@ uv run nowplaying-web    # consumer: http://<device-ip>:4940
 ```powershell
 uv sync --extra windows
 uv run nowplaying        # producer: SMTC via winrt
-uv run nowplaying-web    # consumer: http://localhost:4940
+uv run nowplaying-web    # consumer: http://<device-ip>:4940
 ```
 
 Data dir: `~/.local/share/nowplaying/` on Linux, `%LOCALAPPDATA%\nowplaying\` on Windows. Override with `NOWPLAYING_DB` / `NOWPLAYING_COVER`. Source auto-detects from OS; force with `NOWPLAYING_SOURCE=dbus|windows`.
