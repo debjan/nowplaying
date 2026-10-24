@@ -73,9 +73,7 @@ def detect_side_borders(img: Image.Image, tolerance=50) -> dict:
     if tolerance > 0:
         diff = diff.point(lambda p: 255 if p > tolerance else 0)
 
-    bbox = diff.getbbox()
-
-    if not bbox:
+    if not (bbox := diff.getbbox()):
         return {
             'has_side_borders': False,
             'left_border_px': 0,
@@ -110,9 +108,7 @@ def detect_top_borders(img: Image.Image, tolerance=50) -> dict:
     if tolerance > 0:
         diff = diff.point(lambda p: 255 if p > tolerance else 0)
 
-    bbox = diff.getbbox()
-
-    if not bbox:
+    if not (bbox := diff.getbbox()):
         return {
             'has_top_bottom_borders': False,
             'top_border_px': 0,
@@ -194,8 +190,7 @@ def yt_dlp(artist: str, album: str, title: str) -> str | None:
         logger.warning(f'[Error] album art lookup failed: {e}')
         return None
     if entries := js.get("entries"):
-        video_id = entries[0].get("id")
-        if video_id:
+        if video_id := entries[0].get("id"):
             logger.debug(f'[yt-dlp] {video_id}')
             return video_id
     else:
@@ -248,6 +243,31 @@ def get_release(artist: str, album: str, mb_limiter: RateLimiter) -> str | None:
                 logger.debug(f"[musicbrainz] {data[0]['release-group']['id']}")
                 return data[0]['release-group']['id']
         logger.debug(f'[musicbrainz] No match for "{artist}" - "{album}"')
+    except Exception as e:
+        logger.warning(f'[musicbrainz] Error: {e}')
+
+
+def get_recording_length(
+    artist: str, title: str, mb_limiter: RateLimiter
+) -> int | None:
+    """Return the track length in ms from the MusicBrainz recording search, or None."""
+    try:
+        mb_limiter.wait()
+        response = _HTTP.get(
+            'https://musicbrainz.org/ws/2/recording/',
+            params={
+                'query': f'artist:"{artist}" AND recording:"{title}"',
+                'limit': 1,
+                'fmt': 'json',
+            },
+        )
+        response.raise_for_status()
+        if data := response.json().get('recordings'):
+            if difflib.SequenceMatcher(None, data[0]['title'], title).ratio() > 0.8:
+                if length := data[0].get('length'):
+                    logger.debug(f'[musicbrainz] recording length {length}')
+                    return int(length)
+        logger.debug(f'[musicbrainz] No recording match for "{artist}" - "{title}"')
     except Exception as e:
         logger.warning(f'[musicbrainz] Error: {e}')
 
@@ -388,6 +408,7 @@ class TrackMonitor:
         self._mb_limiter = RateLimiter(_MB_MIN_INTERVAL)
         self._review_attempted: set[tuple[str, str]] = set()
         self._description_attempted: set[str] = set()
+        self._duration_attempted: set[tuple[str, str]] = set()
         self._cover_cache: OrderedDict[tuple[str, str, str], tuple[str | None, str | None, str | None, float | None]] = OrderedDict()
 
         if os.path.exists(COVER_FILE):
@@ -499,6 +520,21 @@ class TrackMonitor:
         except Exception as e:
             logger.warning(f'[Error] could not store position: {e}')
 
+    def _fallback_duration(self, artist: str, title: str) -> int | None:
+        """Duration for players that don't report one: DB first, then MusicBrainz.
+
+        Some players (e.g. foobar2000 via SMTC) never populate the timeline,
+        so `Duration` arrives as 0; a missing duration keeps `tracks.duration`
+        NULL, which hides the web UI progress bar and skips the cover lookup.
+        """
+
+        if stored := db.stored_duration(self._conn, artist, title):
+            return stored
+        if (artist, title) in self._duration_attempted:
+            return None
+        self._duration_attempted.add((artist, title))
+        return get_recording_length(artist, title, self._mb_limiter)
+
     def apply(self, fields: dict[str, str]) -> None:
         """Apply one D-Bus signal's field updates; write once if anything changed."""
 
@@ -506,8 +542,7 @@ class TrackMonitor:
         self.track_info = dict(_DEFAULTS)
         for key, value in fields.items():
             value = _EMOJI_RE.sub('', value).strip()
-            value = ' '.join(value.split())
-            if value:
+            if value := ' '.join(value.split()):
                 self.track_info[key] = value
         if self.track_info != prev:
             self.write()
@@ -539,6 +574,9 @@ class TrackMonitor:
         title = self.track_info['Title']
         cover = release_group_id = video_id = None
 
+        if duration is None:
+            duration = self._fallback_duration(artist, title)
+
         if duration:
             try:
                 cover, release_group_id, video_id = self._cover_for(
@@ -556,15 +594,13 @@ class TrackMonitor:
 
         if release_group_id and (artist, album_name) not in self._review_attempted:
             self._review_attempted.add((artist, album_name))
-            review = allmusic_review(release_group_id, self._mb_limiter)
-            if not review:
+            if not (review := allmusic_review(release_group_id, self._mb_limiter)):
                 review = critiquebrainz_review(release_group_id)
 
         description = None
         if video_id and video_id not in self._description_attempted:
             self._description_attempted.add(video_id)
-            description = youtube_description(video_id)
-            if description:
+            if description := youtube_description(video_id):
                 logger.debug(f'[write] description ({len(description)} chars) for {video_id}')
         try:
             track_id = db.resolve_track(

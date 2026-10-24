@@ -200,7 +200,8 @@ def resolve_track(
         ).fetchone()
         if existing:
             conn.execute(
-                'UPDATE tracks SET duration = ?, description = COALESCE(?, description) WHERE id = ?',
+                'UPDATE tracks SET duration = COALESCE(?, duration), '
+                'description = COALESCE(?, description) WHERE id = ?',
                 (duration, description, existing[0]),
             )
             _fold_placeholder(conn, title, artist_id, existing[0])
@@ -213,7 +214,8 @@ def resolve_track(
         ).fetchone()
         if row:
             conn.execute(
-                'UPDATE tracks SET album_id = ?, duration = ?, description = COALESCE(?, description) WHERE id = ?',
+                'UPDATE tracks SET album_id = ?, duration = COALESCE(?, duration), '
+                'description = COALESCE(?, description) WHERE id = ?',
                 (album_id, duration, description, row[0]),
             )
             return row[0]
@@ -223,7 +225,7 @@ def resolve_track(
             INSERT INTO tracks(title, album_id, artist_id, duration, description)
             VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(title, album_id, artist_id) DO UPDATE SET
-                duration    = excluded.duration,
+                duration    = COALESCE(excluded.duration, tracks.duration),
                 description = COALESCE(excluded.description, tracks.description)
             """,
             (title, album_id, artist_id, duration, description),
@@ -241,7 +243,8 @@ def resolve_track(
         ).fetchone()
         if row:
             conn.execute(
-                'UPDATE tracks SET duration = ?, description = COALESCE(?, description) WHERE id = ?',
+                'UPDATE tracks SET duration = COALESCE(?, duration), '
+                'description = COALESCE(?, description) WHERE id = ?',
                 (duration, description, row[0]),
             )
             return row[0]
@@ -283,6 +286,21 @@ def _fold_placeholder(
             (target_id, placeholder_id),
         )
         conn.execute('DELETE FROM tracks WHERE id = ?', (placeholder_id,))
+
+
+def stored_duration(conn: sqlite3.Connection, artist: str, title: str) -> int | None:
+    """Return any previously stored duration for a track, or None."""
+
+    row = conn.execute(
+        """
+        SELECT t.duration
+        FROM tracks t JOIN artists a ON a.id = t.artist_id
+        WHERE a.title = ? AND t.title = ? AND t.duration IS NOT NULL
+        ORDER BY t.id DESC LIMIT 1
+        """,
+        (_normalize(artist), _normalize(title)),
+    ).fetchone()
+    return row[0] if row else None
 
 
 def release_for(

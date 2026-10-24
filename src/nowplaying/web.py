@@ -6,7 +6,7 @@ import re
 import shutil
 import sqlite3
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
@@ -43,7 +43,7 @@ _asset_cache: dict[Path, tuple[str, bytes]] = {}
 
 
 @asynccontextmanager
-async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
     yield
     if _broadcaster_task is not None:
         _broadcaster_task.cancel()

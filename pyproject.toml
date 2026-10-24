@@ -1,7 +1,7 @@
 [project]
 name = "nowplaying"
 version = "0.1.0"
-description = "now-playing dashboard with live server-sent-event updates and control"
+description = "Universal now-playing dashboard for any media app with live server-sent-event updates"
 readme = "README.md"
 authors = [
     { name = "debjan" }
@@ -34,7 +34,8 @@ windows = [
 dev = ["pytest>=8"]
 
 [project.scripts]
-nowplaying = "nowplaying.monitor:main"
+nowplaying = "nowplaying.app:main"
+nowplaying-monitor = "nowplaying.monitor:main"
 nowplaying-web = "nowplaying.web:main"
 
 [build-system]
@@ -44,4 +45,22 @@ build-backend = "uv_build"
 [tool.ruff.lint]
 ignore = ["S", "DTZ", 'BLE001', "SIM"]
 
+# Platform-specific imports: dbus-next exists only on Linux (dbus extra),
+# winrt only on Windows (windows extra). ty checks all files on every
+# platform, so silence unresolved-import per file (unused-ignore warnings
+# on the native platform are harmless).
+[[tool.ty.overrides]]
+include = ["src/nowplaying/sources/dbus_source.py"]
+rules = { unresolved-import = "ignore" }
 
+[[tool.ty.overrides]]
+include = ["src/nowplaying/sources/mpris_source.py"]
+rules = { unresolved-import = "ignore" }
+
+[[tool.ty.overrides]]
+include = ["src/nowplaying/sources/windows_source.py"]
+rules = { unresolved-import = "ignore" }
+
+[[tool.ty.overrides]]
+include = ["src/nowplaying/windows_control.py"]
+rules = { unresolved-import = "ignore" }

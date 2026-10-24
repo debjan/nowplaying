@@ -1,13 +1,13 @@
 # nowplaying
 
-"now playing" dashboard that captures track metadata from **any media app** and shows it on a minimal web page with playback controls and **live push updates** (no client polling for track data).
+Universal "now playing" dashboard that captures track metadata from **any media app** and shows it on a minimal web page with playback controls and **live push updates** (no client polling for track data).
 
 ![screenshot](./img/screenshot.png)
 
-| Platform             | Sources (auto-detected)                                                                                                                                          |
-| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Linux / Raspberry Pi | Bluetooth A2DP phones/tablets via BlueZ `MediaPlayer1` (system D-Bus) + local players via MPRIS (`Spotify`, `VLC`, `mpv`, browsers, ...) (session D-Bus)         |
-| Windows              | Any app integrated with System Media Transport Controls - `Spotify`, browsers (`YouTube`, `SoundCloud`, ...), `Apple Music`, local players, ... via SMTC/`winrt` |
+| Platform | Sources (auto-detected) |
+| -------- | ----------------------- |
+| Linux / Raspberry Pi | Bluetooth A2DP phones/tablets via BlueZ `MediaPlayer1` (system D-Bus) + local players via MPRIS (`Spotify`, `VLC`, `mpv`, browsers, ...) (session D-Bus) |
+| Windows | Any app integrated with System Media Transport Controls — `Spotify`, browsers (`YouTube`, `SoundCloud`, ...), `Apple Music`, local players, ... via SMTC/`winrt` |
 
 ## How it works
 
@@ -63,16 +63,17 @@ cp .env.example .env   # optional overrides only
 
 ```bash
 uv sync --extra dbus
-uv run nowplaying        # producer: BlueZ + MPRIS via D-Bus
-uv run nowplaying-web    # consumer: http://<device-ip>:4940
+uv run nowplaying        # monitor + web UI on http://<device-ip>:4940
 ```
+
+Run the halves separately when needed: `uv run nowplaying-monitor` (producer:
+BlueZ + MPRIS via D-Bus) and `uv run nowplaying-web` (consumer only).
 
 ### Windows
 
 ```powershell
 uv sync --extra windows
-uv run nowplaying        # producer: SMTC via winrt
-uv run nowplaying-web    # consumer: http://<device-ip>:4940
+uv run nowplaying        # SMTC monitor + web UI on http://localhost:4940
 ```
 
 Data dir: `~/.local/share/nowplaying/` on Linux, `%LOCALAPPDATA%\nowplaying\` on Windows. Override with `NOWPLAYING_DB` / `NOWPLAYING_COVER`. Source auto-detects from OS; force with `NOWPLAYING_SOURCE=dbus|windows`.
@@ -81,19 +82,19 @@ Data dir: `~/.local/share/nowplaying/` on Linux, `%LOCALAPPDATA%\nowplaying\` on
 
 All knobs are env vars (real env -> `.env` -> defaults). See `.env.example`.
 
-| Variable                              | Default                                | Purpose                                                       |
-| ------------------------------------- | -------------------------------------- | ------------------------------------------------------------- |
-| `NOWPLAYING_DB`                       | `<data-dir>/nowplaying.db`             | SQLite database path (all track state lives here)             |
-| `NOWPLAYING_COVER`                    | `<data-dir>/cover.png`                 | Trimmed album-art image file                                  |
-| `NOWPLAYING_HOST` / `NOWPLAYING_PORT` | `0.0.0.0` / `4940`                     | Web server bind                                               |
-| `NOWPLAYING_SOURCE`                   | `dbus` on Linux / `windows` on Windows | Track source backend (`dbus` = BlueZ+MPRIS, `windows` = SMTC) |
-| `YT_DLP`                              | *(off)*                                | Allow the yt-dlp YouTube search fallback for album art        |
-| `FANART_API_KEY`                      | *(shared project key)*                 | Fanart.tv key (falls back to built-in project key)            |
-| `GOOGLE_API_KEY`                      | *(off)*                                | YouTube Data API key for per-track descriptions               |
-| `SKIP_FOREVER`                        | *(off)*                                | Auto-skip tracks skipped via Next 3+ times                    |
-| `PREVIOUS_LOVE`                       | *(off)*                                | Show a heart for tracks Previous-ed via 3+ times              |
-| `PLAYERCTL_PLAYER`                    | *(empty)*                              | Hardcode MPRIS player if needed                               |
-| `NOWPLAYING_DEBUG`                    | *(off)*                                | Verbose logging to `NOWPLAYING_DEBUG_LOG`                     |
+| Variable                              | Default                                   | Purpose                                                |
+| ------------------------------------- | ----------------------------------------- | ------------------------------------------------------ |
+| `NOWPLAYING_DB`                       | `<data-dir>/nowplaying.db`                | SQLite database path (all track state lives here)      |
+| `NOWPLAYING_COVER`                    | `<data-dir>/cover.png`                    | Trimmed album-art image file                           |
+| `NOWPLAYING_HOST` / `NOWPLAYING_PORT` | `0.0.0.0` / `4940`                        | Web server bind                                        |
+| `NOWPLAYING_SOURCE`                   | `dbus` on Linux / `windows` on Windows    | Track source backend (`dbus` = BlueZ+MPRIS, `windows` = SMTC) |
+| `YT_DLP`                              | *(off)*                                   | Allow the yt-dlp YouTube search fallback for album art |
+| `FANART_API_KEY`                      | *(shared project key)*                    | Fanart.tv key (falls back to built-in project key)     |
+| `GOOGLE_API_KEY`                      | *(off)*                                   | YouTube Data API key for per-track descriptions        |
+| `SKIP_FOREVER`                        | *(off)*                                   | Auto-skip tracks skipped via Next 3+ times             |
+| `PREVIOUS_LOVE`                       | *(off)*                                   | Show a heart for tracks Previous-ed via 3+ times       |
+| `PLAYERCTL_PLAYER`                    | *(empty)*                                 | Hardcode MPRIS player if needed                        |
+| `NOWPLAYING_DEBUG`                    | *(off)*                                   | Verbose logging to `NOWPLAYING_DEBUG_LOG`              |
 
 ## HTTP API
 
@@ -113,7 +114,9 @@ I made this after plugging my amp to my raspberry pi, making it bluetooth receiv
 
 ## Deployment
 
-Linux only - units in `systemd/`:
+Linux only — units in `systemd/` (the two halves run as separate services, so
+the monitor unit uses `nowplaying-monitor` to avoid starting a second web
+server):
 
 ```bash
 cp systemd/nowplaying.service systemd/nowplaying-web.service ~/.config/systemd/user/
@@ -121,4 +124,7 @@ systemctl --user daemon-reload
 systemctl --user enable --now nowplaying nowplaying-web
 ```
 
-Windows: no service file - run the two `uv run` commands above, or schedule them via Task Scheduler.
+For a single systemd unit instead, point one unit at
+`ExecStart=... uv run nowplaying` and drop `nowplaying-web.service`.
+
+Windows: no service file — run `uv run nowplaying`, or schedule it via Task Scheduler.
