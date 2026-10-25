@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 
 import asyncio
+import colorsys
+import hashlib
 import json
 import re
 import shutil
@@ -20,6 +22,7 @@ from fastapi.responses import (
     PlainTextResponse,
     StreamingResponse,
 )
+from PIL import Image, ImageStat
 
 from nowplaying import config, db
 
@@ -39,7 +42,117 @@ else:
 
 _ACCENT_RE = re.compile(r'--accent\s*:\s*(#[0-9a-fA-F]{3,8})')
 
+# Dynamic themes: their palettes are derived from the current album cover's
+# average color (see `_adaptive_palette`) instead of a static CSS file.
+ADAPTIVE_THEMES = frozenset({'adaptive-light.css', 'adaptive-dark.css'})
+
+# Palettes used when no cover exists (or the image can't be decoded).
+_ADAPTIVE_FALLBACKS = {
+    'adaptive-dark.css': {
+        'foreground': '#EBDBB2',
+        'background': '#1D2021',
+        'shadow': '#3C3836',
+        'accent': '#B8BB26',
+    },
+    'adaptive-light.css': {
+        'foreground': '#3C3836',
+        'background': '#FBF1C7',
+        'shadow': '#D5C4A1',
+        'accent': '#B8BB26',
+    },
+}
+
 _asset_cache: dict[Path, tuple[str, bytes]] = {}
+
+_adaptive_palette_cache: dict[str, tuple[tuple[int | None, bool], dict[str, str]]] = {}
+
+
+def _hex(h: float, s: float, l: float) -> str:
+    """HSL (all in [0, 1]) as '#RRGGBB'."""
+    r, g, b = colorsys.hls_to_rgb(h, l, s)
+    return f'#{round(r * 255):02X}{round(g * 255):02X}{round(b * 255):02X}'
+
+
+def _cover_hsl() -> tuple[float, float, float] | None:
+    """Average color of the current album cover as (hue, lightness, saturation)."""
+    try:
+        with Image.open(config.COVER_FILE) as img:
+            thumb = img.convert('RGB').resize((16, 16))
+        mean = ImageStat.Stat(thumb).mean  # [avg_r, avg_g, avg_b] in 0..255
+        rgb = tuple(c / 255 for c in mean[:3])
+    except (OSError, ValueError):
+        return None
+    return colorsys.rgb_to_hls(*rgb)
+
+
+def _adaptive_palette(name: str) -> dict[str, str]:
+    """Palette for an adaptive theme, tinted by the cover's average color."""
+    sample = _cover_hsl()
+    if sample is None:
+        return dict(_ADAPTIVE_FALLBACKS[name])
+    h, l, s = sample
+    if name == 'adaptive-dark.css':
+        return {
+            'foreground': _hex(h, min(s, 0.10), 0.88),
+            'background': _hex(h, min(s, 0.20), 0.08),
+            'shadow': _hex(h, min(s, 0.24), 0.16),
+            'accent': _hex(h, min(max(s, 0.55), 0.85), min(max(l, 0.55), 0.80)),
+        }
+    return {
+        'foreground': _hex(h, min(s, 0.12), 0.20),
+        'background': _hex(h, min(s, 0.20), 0.92),
+        'shadow': _hex(h, min(s, 0.22), 0.84),
+        'accent': _hex(h, min(max(s, 0.50), 0.85), min(max(l, 0.35), 0.55)),
+    }
+
+
+def _adaptive_css_text(palette: dict[str, str]) -> bytes:
+    """Serialize a palette in the same shape as the static theme files."""
+    text = (
+        ':root {\n'
+        f"  --foreground: {palette['foreground']};\n"
+        f"  --background: {palette['background']};\n"
+        f"  --shadow: {palette['shadow']};\n"
+        f"  --accent: {palette['accent']};\n"
+        '}\n'
+    )
+    return text.encode('utf-8')
+
+
+async def _adaptive_palette_cached(name: str) -> dict[str, str]:
+    """Palette for an adaptive theme, recomputed when the cover or track changes.
+
+    Follows the *current* track's art: the cover file is persistent, so a track
+    without album art must yield the neutral fallback even while a previous
+    album's cover file lingers on disk.
+    """
+    try:
+        st = await aiofiles.os.stat(config.COVER_FILE)
+        mtime: int | None = st.st_mtime_ns
+    except OSError:
+        mtime = None
+    try:
+        track = await read_track()
+    except (OSError, sqlite3.Error):
+        track = None
+    key = (mtime, bool(track and track.get('CoverUrl')))
+    cached = _adaptive_palette_cache.get(name)
+    if cached is None or cached[0] != key:
+        if key[0] is not None and key[1]:
+            palette = await asyncio.to_thread(_adaptive_palette, name)
+        else:
+            palette = dict(_ADAPTIVE_FALLBACKS[name])
+        cached = (key, palette)
+        _adaptive_palette_cache[name] = cached
+    return cached[1]
+
+
+async def _adaptive_asset(name: str) -> tuple[str, bytes]:
+    """`(etag, bytes)` for a generated adaptive theme."""
+    palette = await _adaptive_palette_cached(name)
+    content = _adaptive_css_text(palette)
+    etag = f'"adp-{name[:-4]}-{hashlib.sha1(content).hexdigest()[:12]}"'
+    return etag, content
 
 
 @asynccontextmanager
@@ -164,7 +277,11 @@ async def theme(filename: str, request: Request) -> Response:
         or '\\' in filename
     ):
         raise HTTPException(status_code=400, detail='Invalid theme filename')
-    loaded = await _load_asset(THEMES_DIR / filename)
+    loaded = (
+        await _adaptive_asset(filename)
+        if filename in ADAPTIVE_THEMES
+        else await _load_asset(THEMES_DIR / filename)
+    )
     if loaded is None:
         return Response('/* theme not found */', status_code=404, media_type='text/css')
     etag, content = loaded
@@ -183,9 +300,11 @@ async def themes() -> list[dict[str, str | None]]:
         names = await aiofiles.os.listdir(THEMES_DIR)
     except OSError:
         return []
-    result = []
+    result: list[dict[str, str | None]] = []
     for name in sorted(names):
         if not name.endswith('.css') or name.startswith('.'):
+            continue
+        if name in ADAPTIVE_THEMES:  # generated dynamically below
             continue
         try:
             async with aiofiles.open(THEMES_DIR / name, 'r', encoding='utf-8') as f:
@@ -197,6 +316,10 @@ async def themes() -> list[dict[str, str | None]]:
             'name': name.removesuffix('.css'),
             'accent': match.group(1) if match else None,
         })
+    for name in sorted(ADAPTIVE_THEMES):
+        accent = (await _adaptive_palette_cached(name))['accent']
+        result.append({'name': name.removesuffix('.css'), 'accent': accent})
+    result.sort(key=lambda item: item['name'] or '')
     return result
 
 
@@ -250,10 +373,17 @@ async def track() -> Response:
     )
 
 
-def _served_cover(raw: str | None) -> str | None:
-    """Map a stored raw cover URL to the served `/cover.png?v=` URL for the frontend."""
+def _served_cover(track: dict) -> str | None:
+    """Map a stored raw cover URL to the served `/cover.png?v=` URL for the frontend.
 
-    return config.cover_url(raw) if raw else None
+    The version hash includes the track identity (artist|album) so a shared raw
+    thumbnail URL across two albums still produces distinct URLs per album -
+    the browser never serves one album's cached art for another.
+    """
+    if not (raw := track.get('CoverUrl')):
+        return None
+    extra = f"{track.get('Artist') or ''}|{track.get('Album') or ''}"
+    return config.cover_url(raw, extra)
 
 
 def _payload(track: dict) -> dict:
@@ -261,7 +391,7 @@ def _payload(track: dict) -> dict:
         'Artist': track.get('Artist', 'Unknown Artist'),
         'Album': track.get('Album'),
         'Title': track.get('Title', 'Unknown Title'),
-        'Album Art': _served_cover(track.get('CoverUrl')),
+        'Album Art': _served_cover(track),
         'Duration': track.get('Duration'),
         'TrackId': track.get('TrackId'),
         'Review': track.get('Review'),
@@ -295,18 +425,18 @@ _UNSET = object()
 
 async def _broadcaster() -> None:
     global _last_track_event, _last_position_event, _last_status_event
-    last_id: object = _UNSET
+    last_token: object = _UNSET
     last_position_key: tuple[int, str] | None = None
     last_status: object = _UNSET
     status_ts = 0.0
     while True:
         now = time.monotonic()
         try:
-            hist_id = await db.alatest_history_id(config.DB_PATH)
+            token = await db.alatest_change_token(config.DB_PATH)
         except (OSError, sqlite3.Error):
-            hist_id = None
-        if hist_id != last_id:
-            last_id = hist_id
+            token = None
+        if token != last_token:
+            last_token = token
             try:
                 data = await read_track()
             except (OSError, sqlite3.Error):

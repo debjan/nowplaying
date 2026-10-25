@@ -73,6 +73,12 @@ class MprisSource:
         self.loop = loop
         self.bus: MessageBus | None = None
         self.player_service: str | None = None
+        # Serializes the (async) playback-status check + apply, so metadata
+        # signals keep their arrival order.
+        self._apply_lock = asyncio.Lock()
+        # Strong refs: a task created from the (sync) signal handler must not be
+        # garbage-collected while it is still running.
+        self._tasks: set[asyncio.Task] = set()
 
     async def run(self) -> None:
         """Connect to the session bus and run until disconnected.
@@ -114,6 +120,61 @@ class MprisSource:
             return None
         return _unwrap(reply.body[0])
 
+    def _spawn(self, coro) -> None:
+        """Run a coroutine from the sync signal handler, keeping a strong ref."""
+
+        task = asyncio.create_task(coro)
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    async def _player_status(self, service: str) -> str | None:
+        """Fetch one player's `PlaybackStatus`; None when unavailable."""
+
+        status = await self._get_prop(service, _MPRIS_PLAYER_IFACE, 'PlaybackStatus')
+        return status if isinstance(status, str) else None
+
+    async def _apply_metadata(self, service: str, fields: dict[str, str]) -> None:
+        """Apply a player's metadata unless a different player is playing.
+
+        MPRIS has no single "current player": every player signals on its own
+        and the monitor takes last-change-wins. A paused/stopped player (e.g. a
+        browser tab left on an old track) must not overwrite the track of a
+        player that is actually playing - that produced spurious history rows
+        and the wrong album cover during track changes. A non-playing player is
+        still applied when nothing else is playing, so pausing keeps the
+        current track on screen.
+        """
+
+        if not any(key in fields for key in ('Artist', 'Album', 'Title')):
+            logger.debug('[mpris] Metadata incomplete; nothing to apply')
+            return
+        async with self._apply_lock:
+            status = await self._player_status(service)
+            if status not in (None, 'Playing'):
+                active = self.player_service
+                if (
+                    active is not None
+                    and active != service
+                    and await self._player_status(active) == 'Playing'
+                ):
+                    logger.debug(
+                        f'[mpris] ignoring {status.lower()} {service}; '
+                        f'{active} is playing'
+                    )
+                    return
+            self.player_service = service
+            self.monitor.submit(self.monitor.apply, fields)
+
+    async def _on_player_playing(self, service: str) -> None:
+        """A player started playing: follow it and show its current track."""
+
+        meta = await self._get_prop(service, _MPRIS_PLAYER_IFACE, 'Metadata')
+        if not isinstance(meta, dict):
+            return
+        fields = _extract_mpris_metadata(meta)
+        logger.debug(f'[mpris] {service} started playing -> {fields}')
+        await self._apply_metadata(service, fields)
+
     async def _snapshot_current_players(self) -> None:
         """Apply the current track of an already-playing MPRIS player.
 
@@ -142,29 +203,27 @@ class MprisSource:
         )
         if not players:
             return
-        fallback: str | None = None
+        fallback: tuple[str, dict[str, str]] | None = None
         for player in players:
-            status = await self._get_prop(player, _MPRIS_PLAYER_IFACE, 'PlaybackStatus')
+            status = await self._player_status(player)
             meta = await self._get_prop(player, _MPRIS_PLAYER_IFACE, 'Metadata')
             if not isinstance(meta, dict):
                 continue
             fields = _extract_mpris_metadata(meta)
             if not any(key in fields for key in ('Artist', 'Album', 'Title')):
                 continue
-            self.player_service = player
             if status == 'Playing':
                 logger.debug(f'[mpris] startup snapshot from playing player {player}')
+                self.player_service = player
                 self.monitor.submit(self.monitor.apply, fields)
                 return
             if fallback is None:
-                fallback = player
+                fallback = (player, fields)
         if fallback is not None:
-            meta = await self._get_prop(fallback, _MPRIS_PLAYER_IFACE, 'Metadata')
-            if isinstance(meta, dict):
-                fields = _extract_mpris_metadata(meta)
-                if any(key in fields for key in ('Artist', 'Album', 'Title')):
-                    logger.debug(f'[mpris] startup snapshot from {fallback}')
-                    self.monitor.submit(self.monitor.apply, fields)
+            player, fields = fallback
+            logger.debug(f'[mpris] startup snapshot from {player}')
+            self.player_service = player
+            self.monitor.submit(self.monitor.apply, fields)
 
     async def _on_metadata_signal(self, sender: str) -> None:
         """Fetch the MPRIS `Metadata` property and apply it."""
@@ -175,10 +234,7 @@ class MprisSource:
             return
         fields = _extract_mpris_metadata(meta)
         logger.debug(f'[mpris] Get Metadata -> {fields}')
-        if any(key in fields for key in ('Artist', 'Album', 'Title')):
-            self.monitor.submit(self.monitor.apply, fields)
-        else:
-            logger.debug('[mpris] Metadata incomplete; nothing to apply')
+        await self._apply_metadata(sender, fields)
 
     async def _poll_position(self) -> None:
         """Poll MPRIS `Position` every 10s (MPRIS never signals it)."""
@@ -214,9 +270,15 @@ class MprisSource:
                 and isinstance(msg.body[0], str)
                 and msg.body[0].startswith(_MPRIS_PREFIX)
             ):
-                self.player_service = msg.sender
                 changed = msg.body[1]
                 invalidated = msg.body[2] if len(msg.body) > 2 else []
+                if (
+                    'PlaybackStatus' in changed
+                    and _unwrap(changed['PlaybackStatus']) == 'Playing'
+                ):
+                    # A player started playing: make it the followed one, even
+                    # if it has no new Metadata signal of its own.
+                    self._spawn(self._on_player_playing(msg.sender))
                 if 'Metadata' not in changed and 'Metadata' not in invalidated:
                     return
                 if 'Metadata' in changed:
@@ -226,16 +288,19 @@ class MprisSource:
                     fields = _extract_mpris_metadata(meta)
                     logger.debug(f'[mpris] Metadata changed -> {fields}')
                     if any(key in fields for key in ('Artist', 'Album', 'Title')):
-                        self.monitor.submit(self.monitor.apply, fields)
+                        self._spawn(self._apply_metadata(msg.sender, fields))
                         return
                 logger.debug('[mpris] Metadata invalidated; fetching via Get')
-                asyncio.create_task(self._on_metadata_signal(msg.sender))
+                self._spawn(self._on_metadata_signal(msg.sender))
             elif (
                 msg.interface == _MPRIS_PLAYER_IFACE
                 and msg.member == 'Seeked'
                 and msg.body
             ):
                 # Seeked carries the new position in microseconds.
+                if self.player_service != msg.sender:
+                    logger.debug(f'[mpris] ignoring Seeked from {msg.sender}')
+                    return
                 try:
                     position_ms = int(_unwrap(msg.body[0])) // 1000
                 except (TypeError, ValueError, IndexError):

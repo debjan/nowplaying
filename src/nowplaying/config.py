@@ -88,9 +88,15 @@ def ensure_dirs() -> None:
         parent.mkdir(parents=True, exist_ok=True)
 
 
-def cover_url(url: str) -> str:
-    """Served URL for a cover thumbnail: COVER_URL with a version query param."""
-    key = hashlib.sha1(url.encode('utf-8')).hexdigest()[:8]
+def cover_url(url: str, extra: str = '') -> str:
+    """Served URL for a cover thumbnail: COVER_URL with a version query param.
+
+    `extra` (e.g. artist|album) is hashed into the version so two different
+    albums sharing the same raw thumbnail URL still get distinct URLs -
+    otherwise the browser's immutable cache would serve the first album's art
+    for the second one.
+    """
+    key = hashlib.sha1(f'{extra}|{url}'.encode()).hexdigest()[:8]
     return f'{COVER_URL}?v={key}'
 
 

@@ -31,6 +31,9 @@ _DEFAULTS = {
     'Title': 'Unknown Title',
     'Duration': '0',
 }
+# Fields that identify a track; a signal that only refines the others (e.g.
+# Duration) must not record a second history row for the same track.
+_IDENTITY_FIELDS = ('Artist', 'Album', 'Title')
 _EMOJI_RE = re.compile(
     r'[\U0001F600-\U0001F64F]'   # Emoticons
     r'|[\U0001F300-\U0001F5FF]'  # Symbols & Pictographs
@@ -411,10 +414,15 @@ class TrackMonitor:
         self._duration_attempted: set[tuple[str, str]] = set()
         self._cover_cache: OrderedDict[tuple[str, str, str], tuple[str | None, str | None, str | None, float | None]] = OrderedDict()
 
+        # Identity + row id of the last recorded track, so a late metadata
+        # refinement (duration) updates that row instead of duplicating history.
+        self._last_identity: tuple[str, str, str] | None = None
+        self._last_track_id: int | None = None
+
         if os.path.exists(COVER_FILE):
-            self._last_cover_url = db.latest_cover_url(self._conn)
+            self._last_cover_key = db.latest_cover_key(self._conn)
         else:
-            self._last_cover_url = None
+            self._last_cover_key = (None, None, None)
 
     def submit(self, fn, *args) -> None:
         """Run fn on the worker thread; failures are logged, never raised."""
@@ -470,12 +478,20 @@ class TrackMonitor:
                 self._cover_cache.pop(query, None)
             return None, release_group_id, video_id
 
-        if url != self._last_cover_url:
+        # Rewrite COVER_FILE whenever the track identity changes, not just the
+        # raw URL: two different albums can resolve to the same thumbnail URL,
+        # and skipping the download would leave the previous album's bytes on
+        # disk under the same (browser-cached) URL. No-album tracks resolve to
+        # a pseudo-album named after the title, mirror that for the key so the
+        # restart seed (db.latest_cover_key) matches.
+        key_album = title if album == _DEFAULTS['Album'] else album
+        key = (url, artist, key_album)
+        if key != self._last_cover_key:
             logger.debug(f'[cover] downloading new art: {url}')
             if download_cover(url, trim=url.startswith('https://img.youtube')) is None:
                 logger.debug('[cover] download failed; skipping art')
                 return None, release_group_id, video_id
-            self._last_cover_url = url
+            self._last_cover_key = key
         return url, release_group_id, video_id
 
     @staticmethod
@@ -544,10 +560,36 @@ class TrackMonitor:
             value = _EMOJI_RE.sub('', value).strip()
             if value := ' '.join(value.split()):
                 self.track_info[key] = value
-        if self.track_info != prev:
-            self.write()
-        else:
+        if self.track_info == prev:
             logger.debug('[apply] no change vs previous; skipping write')
+            return
+        identity = tuple(self.track_info[k] for k in _IDENTITY_FIELDS)
+        if identity == self._last_identity:
+            # Same track as the last recorded one, only metadata refined (late
+            # Duration, or a re-apply after a partial signal reset track_info to
+            # the defaults): update the track row in place instead of
+            # duplicating the history row.
+            self._refine_track()
+            return
+        self.write()
+
+    def _refine_track(self) -> None:
+        """Persist a late duration for the current track; no new history row."""
+
+        raw = self.track_info['Duration']
+        if raw == _DEFAULTS['Duration'] or self._last_track_id is None:
+            return
+        try:
+            duration = int(raw)
+        except ValueError:
+            return
+        if duration <= 0:
+            return
+        try:
+            db.set_duration(self._conn, self._last_track_id, duration)
+            logger.debug(f'[apply] duration {duration}ms for track {self._last_track_id}')
+        except Exception as e:
+            logger.warning(f'[Error] could not update duration: {e}')
 
     def write(self) -> None:
         """Persist once the metadata is complete."""
@@ -615,6 +657,8 @@ class TrackMonitor:
                 description,
             )
             logger.debug(f'[write] resolved track_id={track_id}')
+            self._last_track_id = track_id
+            self._last_identity = (artist, album_name, title)
             skip_count = db.skip_count(self._conn, track_id)
             auto = config.SKIP_FOREVER and skip_count >= 3
             logger.debug(f'[write] skip_count={skip_count} auto_skip={auto}')

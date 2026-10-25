@@ -322,6 +322,29 @@ def release_for(
     return row[0]
 
 
+def latest_cover_key(conn: sqlite3.Connection) -> tuple[str | None, str | None, str | None]:
+    """Return `(cover_url, artist, album)` of the latest non-auto-skipped history row.
+
+    The monitor seeds its last-written cover identity from this so a restart
+    doesn't re-trim the current cover, while an album change (even one sharing
+    the same raw thumbnail URL) still triggers a fresh download.
+    """
+
+    row = conn.execute(
+        """
+        SELECT al.cover_url, ar.title, al.title
+        FROM history h
+        JOIN tracks t ON t.id = h.track_id
+        JOIN artists ar ON ar.id = t.artist_id
+        JOIN albums al ON al.id = t.album_id
+        WHERE h.auto_skipped = 0 AND al.cover_url NOT LIKE '/%'
+        ORDER BY h.id DESC
+        LIMIT 1
+        """,
+    ).fetchone()
+    return (row[0], row[1], row[2]) if row else (None, None, None)
+
+
 def latest_cover_url(conn: sqlite3.Connection) -> str | None:
     """Return the raw cover URL of the latest non-auto-skipped history row."""
 
@@ -401,6 +424,16 @@ def set_position(conn: sqlite3.Connection, position_ms: int) -> bool:
     return True
 
 
+def set_duration(conn: sqlite3.Connection, track_id: int, duration_ms: int) -> None:
+    """Refine a track's duration in place; no history row is recorded."""
+
+    conn.execute(
+        'UPDATE tracks SET duration = ? WHERE id = ?',
+        (duration_ms, track_id),
+    )
+    conn.commit()
+
+
 def latest_history_id(conn: sqlite3.Connection) -> int | None:
     row = conn.execute('SELECT MAX(id) FROM history').fetchone()
     return row[0] if row and row[0] is not None else None
@@ -478,9 +511,25 @@ async def _afetchone(db_path: str, sql: str, params: tuple = ()) -> tuple | None
     return await _acall(db_path, op)
 
 
-async def alatest_history_id(db_path: str) -> int | None:
-    row = await _afetchone(db_path, 'SELECT MAX(id) FROM history')
-    return row[0] if row and row[0] is not None else None
+async def alatest_change_token(db_path: str) -> tuple[int | None, int | None]:
+    """SSE change signal: `(latest history id, its track's duration)`.
+
+    The duration is part of the token so a track whose duration is refined
+    after it was first recorded (without a new history row) still pushes an
+    update to the browser.
+    """
+
+    row = await _afetchone(
+        db_path,
+        """
+        SELECT h.id, t.duration
+        FROM history h
+        JOIN tracks t ON t.id = h.track_id
+        ORDER BY h.id DESC
+        LIMIT 1
+        """,
+    )
+    return (row[0], row[1]) if row else (None, None)
 
 
 async def aget_current(db_path: str) -> dict | None:

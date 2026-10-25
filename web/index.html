@@ -7,14 +7,18 @@
     <link rel="icon" type="image/svg+xml" href="favicon">
     <script>
         (function () {
-            const saved = localStorage.getItem('theme');
-            if (saved && /^[a-z0-9-]+$/i.test(saved)) {
-                const link = document.createElement('link');
-                link.rel = 'stylesheet';
-                link.href = `themes/${saved}.css`;
-                link.id = 'theme-override';
-                document.head.appendChild(link);
+            // Apply the theme before first paint: user choice, else the OS scheme.
+            let name = localStorage.getItem('theme');
+            if (!name || !/^[a-z0-9-]+$/i.test(name)) {
+                name = window.matchMedia('(prefers-color-scheme: light)').matches
+                    ? 'adaptive-light'
+                    : 'adaptive-dark';
             }
+            const link = document.createElement('link');
+            link.rel = 'stylesheet';
+            link.href = `themes/${name}.css`;
+            link.id = 'theme-override';
+            document.head.appendChild(link);
         })();
     </script>
 </head>
@@ -120,8 +124,19 @@
                 progress.hidden = true;
             }
 
-            // Restore the saved theme; default to mocha.
-            const savedTheme = localStorage.getItem('theme') || 'catppuccin-mocha';
+            // Restore a saved theme if the user picked one; otherwise follow the
+            // OS color scheme (adaptive-dark / adaptive-light) while unpicked.
+            const savedTheme = localStorage.getItem('theme') || '';
+            // Whether a theme was explicitly picked (persisted) — saved at load
+            // or during this session; OS scheme changes must not stomp a pick.
+            let userPicked = Boolean(savedTheme);
+            // Adaptive themes are generated server-side from the album cover;
+            // they are re-fetched (cache-busted by the cover version) on change.
+            const ADAPTIVE_THEMES = new Set(['adaptive-dark', 'adaptive-light']);
+            const osLight = window.matchMedia('(prefers-color-scheme: light)');
+            const defaultSaved = osLight.matches ? 'adaptive-light' : 'adaptive-dark';
+            let currentTheme = savedTheme || defaultSaved;
+            let lastArtVersion = null;
 
             function themeLabel(name) {
                 return name
@@ -130,7 +145,7 @@
                     .join(' ');
             }
 
-            function applyTheme(name) {
+            function applyTheme(name, version, persist = true) {
                 let link = document.getElementById('theme-override');
                 if (!link) {
                     link = document.createElement('link');
@@ -138,8 +153,17 @@
                     link.id = 'theme-override';
                     document.head.appendChild(link);
                 }
-                link.href = `themes/${name}.css`;
-                localStorage.setItem('theme', name);
+                const href = ADAPTIVE_THEMES.has(name) && version
+                    ? `themes/${name}.css?v=${version}`
+                    : `themes/${name}.css`;
+                const url = new URL(href, location.href);
+                if (link.href !== url.href) {
+                    link.href = href;
+                }
+                currentTheme = name;
+                if (persist) {
+                    localStorage.setItem('theme', name);
+                }
             }
 
             function closeMenu() {
@@ -152,8 +176,9 @@
                 themeBtn.setAttribute('aria-expanded', String(!themeMenu.hidden));
             }
 
-            function selectTheme(name, accent) {
-                applyTheme(name);
+            function selectTheme(name, accent, persist = true) {
+                applyTheme(name, null, persist);
+                userPicked = persist;
                 themeDot.style.color = accent || 'var(--accent-color)';
                 themeBtn.title = themeLabel(name);
                 themeMenu.querySelectorAll('li').forEach((li) => {
@@ -190,7 +215,7 @@
                         });
                         themeMenu.appendChild(li);
                     }
-                    selectTheme(savedTheme, accents.get(savedTheme) || null);
+                    selectTheme(currentTheme, accents.get(currentTheme) || null, Boolean(savedTheme));
                 } catch (err) {
                     console.error('Failed to load themes:', err);
                     themeBtn.disabled = true;
@@ -211,6 +236,14 @@
             });
             document.addEventListener('keydown', (e) => {
                 if (e.key === 'Escape') closeMenu();
+            });
+
+            // Follow OS light/dark while no theme was explicitly picked
+            // (this session or a previous one).
+            osLight.addEventListener('change', (e) => {
+                if (!userPicked) {
+                    applyTheme(e.matches ? 'adaptive-light' : 'adaptive-dark', null, false);
+                }
             });
 
             function add_span(el) {
@@ -257,6 +290,14 @@
                 const art = data['Album Art'] || 'cover.svg';
                 if (!artEl.src.endsWith(art)) {
                     artEl.src = art;
+                }
+                // Album art changed (or absent): re-apply an adaptive theme so
+                // its palette follows the cover shown for the current track —
+                // the server serves the neutral fallback for a no-art track.
+                const artVersion = data['Album Art']?.split('?v=')[1] || null;
+                if (ADAPTIVE_THEMES.has(currentTheme) && artVersion !== lastArtVersion) {
+                    lastArtVersion = artVersion;
+                    applyTheme(currentTheme, artVersion, false);
                 }
                 // Rebuild the track rows only when the rendered content changes;
                 // SSE re-emits the current track on every reconnect.

@@ -7,6 +7,9 @@ from loguru import logger
 from winrt.windows.media.control import (
     GlobalSystemMediaTransportControlsSessionManager as SessionManager,
 )
+from winrt.windows.media.control import (
+    GlobalSystemMediaTransportControlsSessionPlaybackStatus as PlaybackStatus,
+)
 
 
 class WindowsSource:
@@ -73,6 +76,42 @@ class WindowsSource:
     def _on_current_session_changed(self, sender, args) -> None:
         self._bridge(self._refresh_session())
 
+    @staticmethod
+    def _is_playing(session) -> bool:
+        """True when the session is actively playing (best-effort)."""
+        try:
+            info = session.get_playback_info()
+        except Exception:
+            return False
+        return (
+            info is not None
+            and info.playback_status == PlaybackStatus.PLAYING
+        )
+
+    def _pick_session(self, current):
+        """Choose which SMTC session to follow.
+
+        Windows briefly promotes another app's (often paused) session to
+        "current" while the active player transitions between tracks. Following
+        it blindly writes a spurious track (wrong art) until the real player
+        becomes current again. Prefer: the current session if it is playing,
+        else the session we were already following if it is still playing,
+        else the only playing session, else whatever Windows reports.
+        """
+
+        if current is not None and self._is_playing(current):
+            return current
+        if self.session is not None and self._is_playing(self.session):
+            return self.session
+        try:
+            sessions = list(self.manager.get_sessions()) if self.manager else []
+        except Exception:
+            sessions = []
+        playing = [s for s in sessions if self._is_playing(s)]
+        if len(playing) == 1:
+            return playing[0]
+        return current
+
     async def _refresh_session(self) -> None:
         """Re-register session event handlers on the current session."""
 
@@ -83,7 +122,7 @@ class WindowsSource:
             self._session_tokens = []
 
         assert self.manager is not None
-        self.session = self.manager.get_current_session()
+        self.session = self._pick_session(self.manager.get_current_session())
         if self.session is None:
             return
 
