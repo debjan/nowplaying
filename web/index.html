@@ -137,6 +137,9 @@
             const defaultSaved = osLight.matches ? 'adaptive-light' : 'adaptive-dark';
             let currentTheme = savedTheme || defaultSaved;
             let lastArtVersion = null;
+            // Latest `accent` per theme from `/api/themes` (adaptive entries are
+            // regenerated per album, so this map is refreshed on cover changes).
+            const themeAccents = new Map();
 
             function themeLabel(name) {
                 return name
@@ -176,14 +179,43 @@
                 themeBtn.setAttribute('aria-expanded', String(!themeMenu.hidden));
             }
 
-            function selectTheme(name, accent, persist = true) {
-                applyTheme(name, null, persist);
-                userPicked = persist;
+            function setThemeDot(accent) {
                 themeDot.style.color = accent || 'var(--accent-color)';
+            }
+
+            function selectTheme(name, accent, persist = true) {
+                applyTheme(name, ADAPTIVE_THEMES.has(name) ? lastArtVersion : null, persist);
+                userPicked = persist;
+                setThemeDot(accent);
                 themeBtn.title = themeLabel(name);
                 themeMenu.querySelectorAll('li').forEach((li) => {
                     li.classList.toggle('selected', li.dataset.theme === name);
                 });
+            }
+
+            function collectThemes(themes) {
+                themeMenu.innerHTML = '';
+                for (const item of themes) {
+                    const name = typeof item === 'string' ? item : item && item.name;
+                    if (!name) continue;
+                    const accent = (item && item.accent) || null;
+                    themeAccents.set(name, accent);
+                    const li = document.createElement('li');
+                    li.dataset.theme = name;
+                    li.role = 'option';
+                    const dot = document.createElement('span');
+                    dot.className = 'menu-dot';
+                    dot.textContent = '⬤';
+                    dot.style.color = accent || 'var(--accent-color)';
+                    const label = document.createElement('span');
+                    label.textContent = themeLabel(name);
+                    li.append(dot, label);
+                    li.addEventListener('click', () => {
+                        selectTheme(name, themeAccents.get(name) || null);
+                        closeMenu();
+                    });
+                    themeMenu.appendChild(li);
+                }
             }
 
             async function loadThemes() {
@@ -192,33 +224,36 @@
                     if (!res.ok) throw new Error(`HTTP ${res.status}`);
                     const themes = await res.json();
                     if (!Array.isArray(themes)) throw new Error('Unexpected response');
-                    const accents = new Map();
-                    themeMenu.innerHTML = '';
+                    collectThemes(themes);
+                    selectTheme(currentTheme, themeAccents.get(currentTheme) || null, Boolean(savedTheme));
+                } catch (err) {
+                    console.error('Failed to load themes:', err);
+                    themeBtn.disabled = true;
+                }
+            }
+
+            // Re-read the generated accent (the adaptive palette follows the
+            // cover) and refresh the picker dot + menu swatches in place.
+            async function refreshThemeAccents() {
+                try {
+                    const res = await fetch('/api/themes');
+                    if (!res.ok) return;
+                    const themes = await res.json();
+                    if (!Array.isArray(themes)) return;
                     for (const item of themes) {
                         const name = typeof item === 'string' ? item : item && item.name;
                         if (!name) continue;
                         const accent = (item && item.accent) || null;
-                        accents.set(name, accent);
-                        const li = document.createElement('li');
-                        li.dataset.theme = name;
-                        li.role = 'option';
-                        const dot = document.createElement('span');
-                        dot.className = 'menu-dot';
-                        dot.textContent = '⬤';
-                        dot.style.color = accent || 'var(--accent-color)';
-                        const label = document.createElement('span');
-                        label.textContent = themeLabel(name);
-                        li.append(dot, label);
-                        li.addEventListener('click', () => {
-                            selectTheme(name, accent);
-                            closeMenu();
-                        });
-                        themeMenu.appendChild(li);
+                        themeAccents.set(name, accent);
+                        const li = themeMenu.querySelector(`li[data-theme="${name}"]`);
+                        const dot = li && li.querySelector('.menu-dot');
+                        if (dot) dot.style.color = accent || 'var(--accent-color)';
                     }
-                    selectTheme(currentTheme, accents.get(currentTheme) || null, Boolean(savedTheme));
+                    if (ADAPTIVE_THEMES.has(currentTheme)) {
+                        setThemeDot(themeAccents.get(currentTheme) || null);
+                    }
                 } catch (err) {
-                    console.error('Failed to load themes:', err);
-                    themeBtn.disabled = true;
+                    console.error('Failed to refresh theme accents:', err);
                 }
             }
 
@@ -242,7 +277,8 @@
             // (this session or a previous one).
             osLight.addEventListener('change', (e) => {
                 if (!userPicked) {
-                    applyTheme(e.matches ? 'adaptive-light' : 'adaptive-dark', null, false);
+                    const name = e.matches ? 'adaptive-light' : 'adaptive-dark';
+                    selectTheme(name, themeAccents.get(name) || null, false);
                 }
             });
 
@@ -298,6 +334,8 @@
                 if (ADAPTIVE_THEMES.has(currentTheme) && artVersion !== lastArtVersion) {
                     lastArtVersion = artVersion;
                     applyTheme(currentTheme, artVersion, false);
+                    // The palette (and thus the picker dot) follows the cover.
+                    refreshThemeAccents();
                 }
                 // Rebuild the track rows only when the rendered content changes;
                 // SSE re-emits the current track on every reconnect.

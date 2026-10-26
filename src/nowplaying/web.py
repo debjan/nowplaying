@@ -11,6 +11,7 @@ import time
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
+from typing import NamedTuple
 
 import aiofiles
 import aiofiles.os
@@ -62,6 +63,45 @@ _ADAPTIVE_FALLBACKS = {
     },
 }
 
+# Adaptive palettes stay deliberately muted: a high-chroma cover would
+# otherwise tint the whole UI with a garish accent. These cap the HSL
+# saturation of the generated colors; the cover's hue is always preserved.
+_ADAPTIVE_TINT_SATURATION = 0.16  # background
+_ADAPTIVE_SHADOW_SATURATION = 0.20
+# Below this cover saturation the art is effectively grayscale: keep the neutral
+# fallback accent instead of inventing a hue from rounding noise.
+_ACHROMATIC_SATURATION = 0.12
+
+
+class _AdaptiveStyle(NamedTuple):
+    """Tuning for one adaptive theme; HSL values are all in [0, 1]."""
+
+    foreground: tuple[float, float]  # (saturation cap, lightness)
+    background_l: float
+    shadow_l: float
+    accent_s: tuple[float, float]  # (saturation floor, saturation cap)
+    accent_l: tuple[float, float]  # lightness clamp
+
+
+# Per theme: foreground (saturation cap, lightness), background/shadow
+# lightness, and the accent's saturation band + lightness clamp.
+_ADAPTIVE_STYLES = {
+    'adaptive-dark.css': _AdaptiveStyle(
+        foreground=(0.08, 0.88),
+        background_l=0.08,
+        shadow_l=0.16,
+        accent_s=(0.20, 0.46),
+        accent_l=(0.58, 0.78),
+    ),
+    'adaptive-light.css': _AdaptiveStyle(
+        foreground=(0.10, 0.20),
+        background_l=0.92,
+        shadow_l=0.84,
+        accent_s=(0.18, 0.42),
+        accent_l=(0.40, 0.52),
+    ),
+}
+
 _asset_cache: dict[Path, tuple[str, bytes]] = {}
 
 _adaptive_palette_cache: dict[str, tuple[tuple[int | None, bool], dict[str, str]]] = {}
@@ -85,24 +125,26 @@ def _cover_hsl() -> tuple[float, float, float] | None:
     return colorsys.rgb_to_hls(*rgb)
 
 
+def _clamp(value: float, low: float, high: float) -> float:
+    return min(max(value, low), high)
+
+
 def _adaptive_palette(name: str) -> dict[str, str]:
     """Palette for an adaptive theme, tinted by the cover's average color."""
     sample = _cover_hsl()
+    style = _ADAPTIVE_STYLES[name]
     if sample is None:
         return dict(_ADAPTIVE_FALLBACKS[name])
     h, l, s = sample
-    if name == 'adaptive-dark.css':
-        return {
-            'foreground': _hex(h, min(s, 0.10), 0.88),
-            'background': _hex(h, min(s, 0.20), 0.08),
-            'shadow': _hex(h, min(s, 0.24), 0.16),
-            'accent': _hex(h, min(max(s, 0.55), 0.85), min(max(l, 0.55), 0.80)),
-        }
+    accent = _ADAPTIVE_FALLBACKS[name]['accent']
+    if s >= _ACHROMATIC_SATURATION:
+        accent = _hex(h, _clamp(s * 0.55, *style.accent_s), _clamp(l, *style.accent_l))
+    fg_s, fg_l = style.foreground
     return {
-        'foreground': _hex(h, min(s, 0.12), 0.20),
-        'background': _hex(h, min(s, 0.20), 0.92),
-        'shadow': _hex(h, min(s, 0.22), 0.84),
-        'accent': _hex(h, min(max(s, 0.50), 0.85), min(max(l, 0.35), 0.55)),
+        'foreground': _hex(h, min(s, fg_s), fg_l),
+        'background': _hex(h, min(s, _ADAPTIVE_TINT_SATURATION), style.background_l),
+        'shadow': _hex(h, min(s, _ADAPTIVE_SHADOW_SATURATION), style.shadow_l),
+        'accent': accent,
     }
 
 

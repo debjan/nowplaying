@@ -4,6 +4,7 @@ import asyncio
 import atexit
 import concurrent.futures
 import difflib
+import html
 import json
 import os
 import re
@@ -21,6 +22,11 @@ from loguru import logger
 from PIL import Image, ImageChops
 
 from nowplaying import config, db
+
+try:
+    from curl_cffi import requests as _curl_cffi
+except ImportError:
+    _curl_cffi = None
 
 COVER_FILE = config.COVER_FILE
 COVER_URL = config.COVER_URL
@@ -50,6 +56,16 @@ _HTTP = httpx.Client(
 atexit.register(_HTTP.close)
 _MB_MIN_INTERVAL = 1.1  # MusicBrainz requires <= 1 request/second
 _MAX_COVER_BYTES = 10 * 1024 * 1024
+
+_ALLMUSIC_IMPERSONATE = 'chrome'
+_ALLMUSIC_MIN_INTERVAL = 1.0
+_BROWSER_UA = (
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+    '(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+)
+_LDJSON_RE = re.compile(
+    r'<script[^>]+type="application/ld\+json"[^>]*>(.*?)</script>', re.DOTALL
+)
 
 logger.remove()
 logger.add(sys.stderr, level='WARNING')
@@ -228,6 +244,9 @@ class RateLimiter:
         self._last = time.monotonic()
 
 
+_ALLMUSIC_LIMITER = RateLimiter(_ALLMUSIC_MIN_INTERVAL)
+
+
 def get_release(artist: str, album: str, mb_limiter: RateLimiter) -> str | None:
     """Return the `release_group_id` for an album, or None."""
     try:
@@ -362,6 +381,36 @@ def critiquebrainz_review(release_group_id: str) -> str | None:
         logger.warning(f'[critiquebrainz] Error: {e}')
 
 
+def _allmusic_page(url: str) -> str:
+    """Fetch an AllMusic page, getting past Cloudflare's bot challenge."""
+    if _curl_cffi is None:
+        response = _HTTP.get(url, headers={'User-Agent': _BROWSER_UA})
+        response.raise_for_status()
+        return response.text
+    response = _curl_cffi.get(url, impersonate=_ALLMUSIC_IMPERSONATE, timeout=20)
+    response.raise_for_status()
+    return response.text
+
+
+def _allmusic_page_review(page: str) -> str | None:
+    """AllMusic's staff review from the page's schema.org `Review` blocks."""
+    for block in _LDJSON_RE.findall(page):
+        try:
+            data = json.loads(block)
+        except ValueError:
+            continue
+        items = data.get('@graph', data) if isinstance(data, dict) else data
+        for item in items if isinstance(items, list) else [items]:
+            if not isinstance(item, dict) or item.get('@type') != 'Review':
+                continue
+            author = item.get('author')
+            name = author.get('name') if isinstance(author, dict) else author
+            body = item.get('reviewBody')
+            if name == 'AllMusic' and isinstance(body, str) and body.strip():
+                return html.unescape(body).strip()
+    return None
+
+
 def allmusic_review(release_group_id: str, mb_limiter: RateLimiter) -> str | None:
     """Return the AllMusic review for an album."""
     try:
@@ -379,16 +428,11 @@ def allmusic_review(release_group_id: str, mb_limiter: RateLimiter) -> str | Non
         ]
         if not resource:
             return None
-        r = _HTTP.get(
-            resource[0], headers={'User-Agent': 'Mozilla/5.0'}
-        )
+        _ALLMUSIC_LIMITER.wait()
         logger.debug(f'[allmusic] Processing {resource[0]}')
-        r.raise_for_status()
-        if m := re.findall(
-            r'<div id="review".*?>\s*?<p>(.*)</p>\s*?</div>', r.text, re.DOTALL
-        ):
-            return re.sub(r'<[^>]+>', '', m[0]).strip()
-        logger.debug(f'[allmusic] No match in {resource[0]}')
+        if review := _allmusic_page_review(_allmusic_page(resource[0])):
+            return review
+        logger.debug(f'[allmusic] No review in {resource[0]}')
     except Exception as e:
         logger.warning(f'[allmusic] Error: {e}')
 
