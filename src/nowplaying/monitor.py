@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-
 import asyncio
 import atexit
 import concurrent.futures
@@ -55,6 +53,15 @@ _HTTP = httpx.Client(
 )
 atexit.register(_HTTP.close)
 _MB_MIN_INTERVAL = 1.1  # MusicBrainz requires <= 1 request/second
+_QUALIFIER_WORDS = frozenset({
+    'remaster', 'remastered', 'remix', 'remixed', 'mix', 'live', 'edit',
+    'version', 'mono', 'stereo', 'demo', 'acoustic', 'instrumental',
+    'deluxe', 'anniversary', 'bonus', 'explicit', 'clean', 'soundtrack',
+    'single', 'radio', 'extended', 'reprise', 'feat', 'featuring', 'ft',
+    'official', 'video', 'audio', 'lyric', 'lyrics', 'hd', '4k',
+})
+_TRAILING_GROUP_RE = re.compile(r'\s*[\(\[](?P<body>[^()\[\]]*)[\)\]]\s*$')
+_TRAILING_DASH_RE = re.compile(r'\s+[-\u2013\u2014]\s+(?P<body>[^-\u2013\u2014]+)$')
 _MAX_COVER_BYTES = 10 * 1024 * 1024
 
 _ALLMUSIC_IMPERSONATE = 'chrome'
@@ -247,6 +254,41 @@ class RateLimiter:
 _ALLMUSIC_LIMITER = RateLimiter(_ALLMUSIC_MIN_INTERVAL)
 
 
+def _is_qualifier(text: str) -> bool:
+    """True when a trailing fragment is a version qualifier, not the title."""
+
+    words = re.findall(r"[a-z']+", text.lower())
+    if not words:
+        return bool(re.search(r'\b(?:19|20)\d{2}\b', text))
+    return words[0] in _QUALIFIER_WORDS or bool(
+        re.fullmatch(r'(?:19|20)\d{2}', words[0])
+    )
+
+
+def _clean_title(title: str) -> str:
+    """Strip trailing version qualifiers from a title before searching."""
+
+    original = ' '.join(title.split())
+    cleaned = original
+    for _ in range(3):
+        previous = cleaned
+        if match := _TRAILING_GROUP_RE.search(cleaned):
+            if _is_qualifier(match.group('body')):
+                cleaned = cleaned[: match.start()].strip()
+        if match := _TRAILING_DASH_RE.search(cleaned):
+            if _is_qualifier(match.group('body')):
+                cleaned = cleaned[: match.start()].strip()
+        if not cleaned or cleaned == previous:
+            break
+    return cleaned or original
+
+
+def _mb_term(text: str) -> str:
+    """Make a term safe to embed in a quoted MusicBrainz Lucene query."""
+
+    return ' '.join(text.replace('"', ' ').replace('\\', ' ').split())
+
+
 def get_release(artist: str, album: str, mb_limiter: RateLimiter) -> str | None:
     """Return the `release_group_id` for an album, or None."""
     try:
@@ -269,29 +311,40 @@ def get_release(artist: str, album: str, mb_limiter: RateLimiter) -> str | None:
         logger.warning(f'[musicbrainz] Error: {e}')
 
 
-def get_recording_length(
-    artist: str, title: str, mb_limiter: RateLimiter
-) -> int | None:
-    """Return the track length in ms from the MusicBrainz recording search, or None."""
-    try:
-        mb_limiter.wait()
-        response = _HTTP.get(
-            'https://musicbrainz.org/ws/2/recording/',
-            params={
-                'query': f'artist:"{artist}" AND recording:"{title}"',
-                'limit': 1,
-                'fmt': 'json',
-            },
+def get_recording(
+    artist: str, title: str, album: str | None, mb_limiter: RateLimiter
+) -> tuple[str | None, int | None] | None:
+    """Return `(recording_mbid, length_ms)` from the MusicBrainz recording search."""
+
+    query_title = _clean_title(title)
+    artist_term = _mb_term(artist)
+    title_term = _mb_term(query_title)
+    queries: list[str] = []
+    if album:
+        queries.append(
+            f'artist:"{artist_term}" AND recording:"{title_term}" '
+            f'AND release:"{_mb_term(album)}"'
         )
-        response.raise_for_status()
-        if data := response.json().get('recordings'):
-            if difflib.SequenceMatcher(None, data[0]['title'], title).ratio() > 0.8:
-                if length := data[0].get('length'):
-                    logger.debug(f'[musicbrainz] recording length {length}')
-                    return int(length)
-        logger.debug(f'[musicbrainz] No recording match for "{artist}" - "{title}"')
-    except Exception as e:
-        logger.warning(f'[musicbrainz] Error: {e}')
+    queries.append(f'artist:"{artist_term}" AND recording:"{title_term}"')
+    for query in queries:
+        try:
+            mb_limiter.wait()
+            response = _HTTP.get(
+                'https://musicbrainz.org/ws/2/recording/',
+                params={'query': query, 'limit': 1, 'fmt': 'json'},
+            )
+            response.raise_for_status()
+            if data := response.json().get('recordings'):
+                if difflib.SequenceMatcher(None, data[0]['title'], query_title).ratio() > 0.8:
+                    mbid = data[0].get('id')
+                    length = data[0].get('length')
+                    logger.debug(f'[musicbrainz] recording {mbid} length {length}')
+                    return mbid, int(length) if length else None
+            logger.debug(f'[musicbrainz] No recording match for "{artist}" - "{title}"')
+        except Exception as e:
+            logger.warning(f'[musicbrainz] Error: {e}')
+            return None
+    return None, None
 
 
 def fanart_cover(release_group_id: str) -> str | None:
@@ -323,42 +376,10 @@ def validate_url(url: str) -> str | None:
         logger.error(f'[validate_url] Error {e}')
 
 
-def verify_description(desc: str) -> str | None:
-    if (
-        not desc
-        or len(desc) > 5000  # essay
-        or desc.startswith('Provided to YouTube')  # autogenerated
-        or desc.count('http') > 3  # bloated with links
-        or desc.count('www') > 3  # bloated with links
-    ):
-        return
-
-    return desc
-
-
 def verify_coverarchive(release_group_id: str) -> str | None:
     """Verify coverartarchive url resolves."""
 
     return validate_url(f'https://coverartarchive.org/release-group/{release_group_id}/front-500')
-
-
-def youtube_description(video_id: str) -> str | None:
-    if not config.GOOGLE_API_KEY:
-        return
-    try:
-        response = _HTTP.get(
-            'https://www.googleapis.com/youtube/v3/videos',
-            params={
-                'part': 'snippet',
-                'id': video_id,
-                'key': config.GOOGLE_API_KEY
-            }
-        )
-        response.raise_for_status()
-        if items := response.json().get('items'):
-            return verify_description(items[0]['snippet'].get('description'))
-    except Exception as e:
-        logger.warning(f'[youtube_description] Error: {e}')
 
 
 def critiquebrainz_review(release_group_id: str) -> str | None:
@@ -442,6 +463,7 @@ class TrackMonitor:
 
     _COVER_CACHE_MAX = 256
     _COVER_RETRY_TTL = 3600
+    _RECORDING_RETRY_TTL = 60.0
 
     def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
         self._loop = loop
@@ -454,9 +476,14 @@ class TrackMonitor:
         )
         self._mb_limiter = RateLimiter(_MB_MIN_INTERVAL)
         self._review_attempted: set[tuple[str, str]] = set()
-        self._description_attempted: set[str] = set()
         self._duration_attempted: set[tuple[str, str]] = set()
-        self._cover_cache: OrderedDict[tuple[str, str, str], tuple[str | None, str | None, str | None, float | None]] = OrderedDict()
+        self._recording_cache: dict[
+            tuple[str, str, str | None], tuple[str | None, int | None]
+        ] = {}
+        # Lookups MusicBrainz could not answer, with the time they failed: not
+        # cached as a result, so a later playback tries again.
+        self._recording_failed: dict[tuple[str, str, str | None], float] = {}
+        self._cover_cache: OrderedDict[tuple[str, str, str], tuple[str | None, str | None, float | None]] = OrderedDict()
 
         # Identity + row id of the last recorded track, so a late metadata
         # refinement (duration) updates that row instead of duplicating history.
@@ -491,8 +518,8 @@ class TrackMonitor:
             and self.track_info['Title'] != _DEFAULTS['Title']
         )
 
-    def _cover_for(self, artist: str, album: str, title: str) -> tuple[str | None, str | None, str | None]:
-        """Return the raw thumbnail URL, MusicBrainz release-group id, and YouTube video id."""
+    def _cover_for(self, artist: str, album: str, title: str) -> tuple[str | None, str | None]:
+        """Return the raw thumbnail URL and MusicBrainz release-group id."""
 
         release_group_id = db.release_for(self._conn, artist, album)
         query = (artist, album, title)
@@ -500,7 +527,6 @@ class TrackMonitor:
             if len(self._cover_cache) >= self._COVER_CACHE_MAX:
                 self._cover_cache.popitem(last=False)
             url = None
-            video_id = None
             if album == _DEFAULTS['Album']:
                 if video_id := yt_dlp(artist, '', title):
                     url = get_youtube_image_url(video_id)
@@ -512,31 +538,25 @@ class TrackMonitor:
                 if not url:
                     if video_id := yt_dlp(artist, album, title):
                         url = get_youtube_image_url(video_id)
-            self._cover_cache[query] = (url, release_group_id, video_id, time.monotonic() if not url else None)
+            self._cover_cache[query] = (url, release_group_id, time.monotonic() if not url else None)
         else:
             self._cover_cache.move_to_end(query)
-        url, release_group_id, video_id, failed_at = self._cover_cache[query]
+        url, release_group_id, failed_at = self._cover_cache[query]
 
         if not url:
             if failed_at is not None and time.monotonic() - failed_at >= self._COVER_RETRY_TTL:
                 self._cover_cache.pop(query, None)
-            return None, release_group_id, video_id
+            return None, release_group_id
 
-        # Rewrite COVER_FILE whenever the track identity changes, not just the
-        # raw URL: two different albums can resolve to the same thumbnail URL,
-        # and skipping the download would leave the previous album's bytes on
-        # disk under the same (browser-cached) URL. No-album tracks resolve to
-        # a pseudo-album named after the title, mirror that for the key so the
-        # restart seed (db.latest_cover_key) matches.
         key_album = title if album == _DEFAULTS['Album'] else album
         key = (url, artist, key_album)
         if key != self._last_cover_key:
             logger.debug(f'[cover] downloading new art: {url}')
             if download_cover(url, trim=url.startswith('https://img.youtube')) is None:
                 logger.debug('[cover] download failed; skipping art')
-                return None, release_group_id, video_id
+                return None, release_group_id
             self._last_cover_key = key
-        return url, release_group_id, video_id
+        return url, release_group_id
 
     @staticmethod
     def _log_future(fut: concurrent.futures.Future) -> None:
@@ -580,20 +600,51 @@ class TrackMonitor:
         except Exception as e:
             logger.warning(f'[Error] could not store position: {e}')
 
-    def _fallback_duration(self, artist: str, title: str) -> int | None:
-        """Duration for players that don't report one: DB first, then MusicBrainz.
+    def _recording(
+        self, artist: str, title: str, album: str | None
+    ) -> tuple[str | None, int | None] | None:
+        """`(recording_mbid, length_ms)` from MusicBrainz, cached per track."""
 
-        Some players (e.g. foobar2000 via SMTC) never populate the timeline,
-        so `Duration` arrives as 0; a missing duration keeps `tracks.duration`
-        NULL, which hides the web UI progress bar and skips the cover lookup.
-        """
+        key = (artist, title, album)
+        if key in self._recording_cache:
+            return self._recording_cache[key]
+        failed_at = self._recording_failed.get(key)
+        if failed_at is not None:
+            if time.monotonic() - failed_at < self._RECORDING_RETRY_TTL:
+                return None
+            del self._recording_failed[key]
+        if len(self._recording_cache) >= self._COVER_CACHE_MAX:
+            self._recording_cache.clear()
+            self._recording_failed.clear()
+        result = get_recording(artist, title, album, self._mb_limiter)
+        if result is None:
+            self._recording_failed[key] = time.monotonic()
+            return None
+        self._recording_cache[key] = result
+        return result
+
+    def _mbid_for(self, artist: str, title: str, album: str | None) -> str | None:
+        """Recording MBID for the track: MusicBrainz first, stored value after."""
+
+        recording = self._recording(artist, title, album)
+        if recording and recording[0]:
+            return recording[0]
+        return db.mbid_for(self._conn, artist, title)
+
+    def _fallback_duration(
+        self, artist: str, title: str, album: str | None
+    ) -> int | None:
+        """Duration for players that don't report one: DB first, then MusicBrainz."""
 
         if stored := db.stored_duration(self._conn, artist, title):
             return stored
         if (artist, title) in self._duration_attempted:
             return None
+        recording = self._recording(artist, title, album)
+        if recording is None:
+            return None  # MusicBrainz unreachable: retry on a later playback
         self._duration_attempted.add((artist, title))
-        return get_recording_length(artist, title, self._mb_limiter)
+        return recording[1]
 
     def apply(self, fields: dict[str, str]) -> None:
         """Apply one D-Bus signal's field updates; write once if anything changed."""
@@ -609,10 +660,6 @@ class TrackMonitor:
             return
         identity = tuple(self.track_info[k] for k in _IDENTITY_FIELDS)
         if identity == self._last_identity:
-            # Same track as the last recorded one, only metadata refined (late
-            # Duration, or a re-apply after a partial signal reset track_info to
-            # the defaults): update the track row in place instead of
-            # duplicating the history row.
             self._refine_track()
             return
         self.write()
@@ -658,14 +705,20 @@ class TrackMonitor:
         artist = self.track_info['Artist']
         album_name = self.track_info['Album']
         title = self.track_info['Title']
-        cover = release_group_id = video_id = None
+        cover = release_group_id = None
 
         if duration is None:
-            duration = self._fallback_duration(artist, title)
+            duration = self._fallback_duration(artist, title, album)
+
+        try:
+            mbid = self._mbid_for(artist, title, album)
+        except Exception:
+            logger.exception('[Error] MusicBrainz recording lookup failed')
+            mbid = None
 
         if duration:
             try:
-                cover, release_group_id, video_id = self._cover_for(
+                cover, release_group_id = self._cover_for(
                     self.track_info['Artist'],
                     self.track_info['Album'],
                     self.track_info['Title'],
@@ -673,7 +726,7 @@ class TrackMonitor:
                 logger.debug(f'[write] cover={cover} release_group_id={release_group_id}')
             except Exception:
                 logger.exception('[Error] cover lookup failed; persisting track without art')
-                cover = release_group_id = video_id = None
+                cover = release_group_id = None
 
             if cover and album is None:
                 album = title
@@ -683,11 +736,6 @@ class TrackMonitor:
             if not (review := allmusic_review(release_group_id, self._mb_limiter)):
                 review = critiquebrainz_review(release_group_id)
 
-        description = None
-        if video_id and video_id not in self._description_attempted:
-            self._description_attempted.add(video_id)
-            if description := youtube_description(video_id):
-                logger.debug(f'[write] description ({len(description)} chars) for {video_id}')
         try:
             track_id = db.resolve_track(
                 self._conn,
@@ -698,9 +746,9 @@ class TrackMonitor:
                 duration,
                 release_group_id,
                 review,
-                description,
+                mbid,
             )
-            logger.debug(f'[write] resolved track_id={track_id}')
+            logger.debug(f'[write] resolved track_id={track_id} mbid={mbid}')
             self._last_track_id = track_id
             self._last_identity = (artist, album_name, title)
             skip_count = db.skip_count(self._conn, track_id)

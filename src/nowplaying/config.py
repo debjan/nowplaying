@@ -21,6 +21,7 @@ over on first run so history isn't orphaned:
     YT_DLP             allow the yt-dlp album-art fallback (1/true/yes/on)
     SKIP_FOREVER       auto-skip tracks skipped >= 3 times (1/true/yes/on)
     PREVIOUS_LOVE      show a heart for tracks Previous-ed >= 3 times while playing
+    LISTENBRAINZ_USER_AGENT  contact User-Agent for the ListenBrainz API
 """
 
 import hashlib
@@ -130,6 +131,10 @@ PLAYERCTL_PLAYER = get_env('PLAYERCTL_PLAYER')
 YT_DLP = get_env('YT_DLP', '').strip().lower() in ('1', 'true', 'yes', 'on')
 FANART_PROJECT = 'b3ef17e6708a180bc9830f9b6e67d43f'
 FANART_API_KEY = get_env('FANART_API_KEY')
-GOOGLE_API_KEY = get_env('GOOGLE_API_KEY')
+# ListenBrainz asks for a descriptive UA that can be traced back to you.
+LISTENBRAINZ_USER_AGENT = get_env(
+    'LISTENBRAINZ_USER_AGENT',
+    'nowplaying/1.0.0 (https://github.com/debjan/nowplaying)',
+)
 
 ensure_dirs()

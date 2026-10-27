@@ -44,7 +44,7 @@ flowchart LR
     WEB -->|"skip/pause control<br/>playerctl (Linux) / SMTC (Windows)"| BT
 ```
 
-- **Monitor** (`nowplaying` command): single `TrackMonitor` fed by one platform backend (auto-detected, override with `NOWPLAYING_SOURCE=dbus|windows`). On Linux it runs BlueZ + MPRIS concurrently (last-change-wins), while on Windows subscribes to SMTC `MediaPropertiesChanged`/`TimelinePropertiesChanged` so **any** app with system media controls is tracked (Spotify, browser tabs, etc.). Every signal is applied atomically and written only on real change (one `history` row per track change, position ticks stay out of `history`). It also resolves covers (`MusicBrainz` release-group → `Fanart.tv` → `coverartarchive` → optional `yt-dlp` YouTube thumbnail), album reviews (`AllMusic` → `CritiqueBrainz`) and YouTube descriptions, caching per album/video.
+- **Monitor** (`nowplaying` command): single `TrackMonitor` fed by one platform backend (auto-detected, override with `NOWPLAYING_SOURCE=dbus|windows`). On Linux it runs BlueZ + MPRIS concurrently (last-change-wins), while on Windows subscribes to SMTC `MediaPropertiesChanged`/`TimelinePropertiesChanged` so **any** app with system media controls is tracked (Spotify, browser tabs, etc.). Every signal is applied atomically and written only on real change (one `history` row per track change, position ticks stay out of `history`). It also resolves covers (`MusicBrainz` release-group → `Fanart.tv` → `coverartarchive` → optional `yt-dlp` YouTube thumbnail), album reviews (`AllMusic` → `CritiqueBrainz`), caching per album.
 - **Web server** (`uvicorn nowplaying.web:app`): FastAPI app that serves the dashboard, versioned album art and one SSE stream multiplexing `track` + `position` + `status` events with `: ping` heartbeats. Playback buttons (`POST /api/player/{play-pause,next,previous}`) drive `playerctl` on Linux or SMTC on Windows.
 
 ## Requirements
@@ -90,7 +90,6 @@ All knobs are env vars (real env -> `.env` -> defaults). See `.env.example`.
 | `NOWPLAYING_SOURCE`                   | `dbus` on Linux / `windows` on Windows | Track source backend (`dbus` = BlueZ+MPRIS, `windows` = SMTC) |
 | `YT_DLP`                              | *(off)*                                | Allow the yt-dlp YouTube search fallback for album art        |
 | `FANART_API_KEY`                      | *(shared project key)*                 | Fanart.tv key (falls back to built-in project key)            |
-| `GOOGLE_API_KEY`                      | *(off)*                                | YouTube Data API key for per-track descriptions               |
 | `SKIP_FOREVER`                        | *(off)*                                | Auto-skip tracks skipped via Next 3+ times                    |
 | `PREVIOUS_LOVE`                       | *(off)*                                | Show a heart for tracks Previous-ed via 3+ times              |
 | `PLAYERCTL_PLAYER`                    | *(empty)*                              | Hardcode MPRIS player if needed                               |

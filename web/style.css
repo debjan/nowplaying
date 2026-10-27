@@ -161,6 +161,21 @@ span.centered {
     }
 }
 
+/* The Artist/Title rows of a track with a MusicBrainz id open a ListenBrainz
+   dialog (similar artists / similar tracks). */
+
+.track-row.has-similar {
+    cursor: pointer;
+    border-radius: 6px;
+    transition: background 0.1s ease;
+}
+
+@media (hover: hover) {
+    .track-row.has-similar:hover {
+        background: color-mix(in srgb, var(--background-color), var(--foreground-color) 8%);
+    }
+}
+
 /* Track icons */
 
 .track-icon {
@@ -413,10 +428,18 @@ span.centered {
     border-radius: 12px;
     width: 620px;
     max-width: 100%;
+    /* let the card shrink to the viewport instead of its widest content */
+    min-width: 0;
     max-height: 85vh;
     display: flex;
     flex-direction: column;
     box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
+}
+
+/* The similar-tracks table needs more room than a review. */
+
+.review-popup-card.wide {
+    width: 860px;
 }
 
 .review-popup-header {
@@ -459,6 +482,7 @@ span.centered {
     overflow-y: auto;
     font-size: 1rem;
     line-height: 1.7;
+    min-width: 0;
 }
 
 .review-popup-body h3,
@@ -492,6 +516,151 @@ span.centered {
 
 .review-popup-body a {
     color: var(--accent-color);
+}
+
+/* Similar tracks: the dialog body holds a table instead of prose. */
+
+.review-popup-body.popup-table {
+    padding: 0;
+    overflow-x: auto;
+}
+
+.popup-status {
+    margin: 0;
+    padding: 1.25rem;
+    color: color-mix(in srgb, var(--foreground-color), var(--background-color) 35%);
+}
+
+.similar-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.95rem;
+    line-height: 1.4;
+}
+
+.similar-table th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--background-color);
+    padding: 0.6rem 0.75rem;
+    border-bottom: 1px solid var(--shadow-color);
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-align: left;
+    text-transform: uppercase;
+    white-space: nowrap;
+    color: color-mix(in srgb, var(--foreground-color), var(--background-color) 40%);
+}
+
+.similar-table td {
+    padding: 0.35rem 0.75rem;
+    border-bottom: 1px solid color-mix(in srgb, var(--shadow-color), transparent 40%);
+    vertical-align: middle;
+}
+
+.similar-table tbody tr:last-child td {
+    border-bottom: none;
+}
+
+/* Rows with an artist MBID open the artist on ListenBrainz. */
+
+.similar-table tbody tr.linked {
+    cursor: pointer;
+}
+
+@media (hover: hover) {
+    .similar-table tbody tr:hover {
+        background: color-mix(in srgb, var(--background-color), var(--foreground-color) 6%);
+    }
+}
+
+.similar-table .num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.similar-table td:nth-child(3) {
+    white-space: nowrap;
+}
+
+.similar-table td:nth-child(4) {
+    min-width: 11rem;
+    overflow-wrap: anywhere;
+}
+
+.similar-table td:nth-child(5) {
+    color: color-mix(in srgb, var(--foreground-color), var(--background-color) 25%);
+    overflow-wrap: anywhere;
+}
+
+.similar-table a {
+    color: inherit;
+    text-decoration: none;
+}
+
+@media (hover: hover) {
+    .similar-table a:hover {
+        color: var(--accent-color);
+        text-decoration: underline;
+    }
+}
+
+.similar-cover {
+    display: block;
+    width: 34px;
+    height: 34px;
+    border: 1px solid var(--shadow-color);
+    border-radius: 4px;
+    object-fit: cover;
+}
+
+.similar-table td:nth-child(2) {
+    width: 1%;
+    padding-right: 0;
+}
+
+/* Similar artists: no cover column, so the artist sits in column 2 and the
+   sample track takes the width the album column would use. */
+
+.similar-table.artists td:nth-child(2) {
+    width: auto;
+    padding-right: 0.75rem;
+    white-space: nowrap;
+}
+
+.similar-table.artists td:nth-child(3) {
+    min-width: 11rem;
+    white-space: normal;
+    color: color-mix(in srgb, var(--foreground-color), var(--background-color) 25%);
+    overflow-wrap: anywhere;
+}
+
+@media (max-width: 600px) {
+    .similar-table th:nth-child(5),
+    .similar-table td:nth-child(5) {
+        display: none;
+    }
+
+    /* Everything may wrap so a phone never has to scroll sideways. */
+    .similar-table th,
+    .similar-table td {
+        padding: 0.35rem 0.5rem;
+    }
+
+    .similar-table td:nth-child(3) {
+        white-space: normal;
+    }
+
+    .similar-table td:nth-child(4) {
+        min-width: 0;
+    }
+
+    .similar-table.artists td:nth-child(2) {
+        white-space: normal;
+    }
 }
 
 /* Responsive */

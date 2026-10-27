@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-
 import asyncio
 import colorsys
 import hashlib
@@ -23,9 +21,9 @@ from fastapi.responses import (
     PlainTextResponse,
     StreamingResponse,
 )
-from PIL import Image, ImageStat
+from PIL import Image
 
-from nowplaying import config, db
+from nowplaying import config, db, listenbrainz
 
 WEB_DIR = Path(__file__).resolve().parent.parent.parent / 'web'
 INDEX = WEB_DIR / 'index.html'
@@ -34,6 +32,11 @@ COVER_SVG = WEB_DIR / 'cover.svg'
 THEMES_DIR = WEB_DIR / 'themes'
 
 PLAYERCTL_ACTIONS = frozenset({'play-pause', 'next', 'previous'})
+
+# ListenBrainz "similar" dialogs: how many rows to return by default/max.
+SIMILAR_LIMIT_DEFAULT = 12
+SIMILAR_LIMIT_MAX = 50
+SIMILAR_ARTIST_LIMIT_DEFAULT = 10
 
 if config.SOURCE == 'windows':
     from nowplaying import windows_control
@@ -47,25 +50,25 @@ _ACCENT_RE = re.compile(r'--accent\s*:\s*(#[0-9a-fA-F]{3,8})')
 # average color (see `_adaptive_palette`) instead of a static CSS file.
 ADAPTIVE_THEMES = frozenset({'adaptive-light.css', 'adaptive-dark.css'})
 
-# Palettes used when no cover exists (or the image can't be decoded).
 _ADAPTIVE_FALLBACKS = {
     'adaptive-dark.css': {
-        'foreground': '#EBDBB2',
-        'background': '#1D2021',
-        'shadow': '#3C3836',
-        'accent': '#B8BB26',
+        'foreground': '#DCDCDC',
+        'background': '#141414',
+        'shadow': '#242424',
+        'accent': '#8A9A7B',  # muted sage, visibly not Gruvbox green
     },
     'adaptive-light.css': {
-        'foreground': '#3C3836',
-        'background': '#FBF1C7',
-        'shadow': '#D5C4A1',
-        'accent': '#B8BB26',
+        'foreground': '#2A2A2A',
+        'background': '#F2F2F2',
+        'shadow': '#CFCFCF',
+        'accent': '#4F6B45',
     },
 }
 
 # Adaptive palettes stay deliberately muted: a high-chroma cover would
 # otherwise tint the whole UI with a garish accent. These cap the HSL
 # saturation of the generated colors; the cover's hue is always preserved.
+_TINT_SAMPLE_SATURATION = 0.25  # pixel qualifies as a tint source above this
 _ADAPTIVE_TINT_SATURATION = 0.16  # background
 _ADAPTIVE_SHADOW_SATURATION = 0.20
 # Below this cover saturation the art is effectively grayscale: keep the neutral
@@ -114,15 +117,35 @@ def _hex(h: float, s: float, l: float) -> str:
 
 
 def _cover_hsl() -> tuple[float, float, float] | None:
-    """Average color of the current album cover as (hue, lightness, saturation)."""
+    """Average color of the current album cover as (hue, lightness, saturation).
+
+    Samples only clearly saturated pixels (falling back to the plain whole-image
+    mean for near-grayscale art): averaging the entire cover cancels complementary
+    hues and washes the mean out to near-zero saturation, which made most covers
+    trip the achromatic rule and rendered the palette Gruvbox-like even with art.
+    """
     try:
         with Image.open(config.COVER_FILE) as img:
-            thumb = img.convert('RGB').resize((16, 16))
-        mean = ImageStat.Stat(thumb).mean  # [avg_r, avg_g, avg_b] in 0..255
-        rgb = tuple(c / 255 for c in mean[:3])
+            thumb = img.convert('RGB').resize((32, 32))
+        raw = thumb.tobytes()
     except (OSError, ValueError):
         return None
+    pixels = [(raw[i], raw[i + 1], raw[i + 2]) for i in range(0, len(raw), 3)]
+    tinted = [
+        (r, g, b)
+        for (r, g, b) in pixels
+        if _pixel_saturation(r, g, b) >= _TINT_SAMPLE_SATURATION
+    ]
+    chosen = tinted or pixels
+    n = len(chosen)
+    rgb = tuple(sum(px[i] for px in chosen) / n / 255 for i in range(3))
     return colorsys.rgb_to_hls(*rgb)
+
+
+def _pixel_saturation(r: int, g: int, b: int) -> float:
+    """HSL saturation of one 8-bit RGB pixel."""
+    _, _, s = colorsys.rgb_to_hls(r / 255, g / 255, b / 255)
+    return s
 
 
 def _clamp(value: float, low: float, high: float) -> float:
@@ -204,6 +227,7 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
         _broadcaster_task.cancel()
         with suppress(asyncio.CancelledError):
             await _broadcaster_task
+    await listenbrainz.aclose()
     await db.aclose_all()
 
 
@@ -415,6 +439,106 @@ async def track() -> Response:
     )
 
 
+@app.get('/api/track/{track_id}/similar')
+async def track_similar(
+    track_id: int,
+    limit: int = SIMILAR_LIMIT_DEFAULT,
+    algorithm: str | None = None,
+) -> dict:
+    """ListenBrainz similar recordings for one stored track.
+
+    Seeded on the track's MusicBrainz recording id and served from the Labs
+    `similar-recordings` datasets (session-based co-listening scores). Without
+    an explicit `algorithm` the datasets are tried in order until one knows the
+    seed, and a seed none of them knows is rescued through another recording of
+    the same song; the response names whichever algorithm answered.
+    """
+
+    if algorithm is not None and algorithm not in listenbrainz.SIMILAR_ALGORITHMS:
+        raise HTTPException(status_code=400, detail=f'Invalid algorithm: {algorithm}')
+    track_row = await db.aget_track(config.DB_PATH, track_id)
+    if track_row is None:
+        raise HTTPException(status_code=404, detail='Unknown track') from None
+    if not (mbid := track_row.get('MBID')):
+        raise HTTPException(
+            status_code=404, detail='Track has no MusicBrainz recording id'
+        ) from None
+
+    limit = max(1, min(limit, SIMILAR_LIMIT_MAX))
+    try:
+        rows = await listenbrainz.similar_recordings(
+            mbid, algorithm=algorithm, limit=limit
+        )
+    except listenbrainz.ListenBrainzError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from None
+
+    return {
+        'MBID': mbid,
+        'Artist': track_row.get('Artist'),
+        'Title': track_row.get('Title'),
+        'Algorithm': rows[0]['algorithm'] if rows else algorithm,
+        'RescuedFrom': rows[0].get('rescued_from') if rows else None,
+        'Tracks': [
+            {
+                'Artist': row['artist'],
+                'ArtistMBID': row['artist_mbid'],
+                'Title': row['title'],
+                'Album': row['album'],
+                'MBID': row['recording_mbid'],
+                'Score': row['score'],
+                'Cover': row['cover_url'],
+            }
+            for row in rows
+        ],
+    }
+
+
+@app.get('/api/track/{track_id}/similar-artists')
+async def track_similar_artists(
+    track_id: int,
+    limit: int = SIMILAR_ARTIST_LIMIT_DEFAULT,
+    mode: str = 'easy',
+) -> dict:
+    """ListenBrainz artists similar to the one behind one stored track.
+
+    Seeded on the track's MusicBrainz recording id: `listenbrainz.similar_artists`
+    resolves it to its artist and lists LB Radio's artist pool.
+    """
+
+    if mode not in listenbrainz.MODES:
+        raise HTTPException(status_code=400, detail=f'Invalid mode: {mode}')
+    track_row = await db.aget_track(config.DB_PATH, track_id)
+    if track_row is None:
+        raise HTTPException(status_code=404, detail='Unknown track') from None
+    if not (mbid := track_row.get('MBID')):
+        raise HTTPException(
+            status_code=404, detail='Track has no MusicBrainz recording id'
+        ) from None
+
+    limit = max(1, min(limit, SIMILAR_LIMIT_MAX))
+    try:
+        rows = await listenbrainz.similar_artists(mbid, mode=mode, limit=limit)
+    except listenbrainz.ListenBrainzError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from None
+
+    return {
+        'MBID': mbid,
+        'Artist': track_row.get('Artist'),
+        'Title': track_row.get('Title'),
+        'Mode': mode,
+        'Artists': [
+            {
+                'Artist': row['artist'],
+                'ArtistMBID': row['artist_mbid'],
+                'Title': row['title'],
+                'MBID': row['recording_mbid'],
+                'Listens': row['listen_count'],
+            }
+            for row in rows
+        ],
+    }
+
+
 def _served_cover(track: dict) -> str | None:
     """Map a stored raw cover URL to the served `/cover.png?v=` URL for the frontend.
 
@@ -436,8 +560,8 @@ def _payload(track: dict) -> dict:
         'Album Art': _served_cover(track),
         'Duration': track.get('Duration'),
         'TrackId': track.get('TrackId'),
+        'MBID': track.get('MBID'),
         'Review': track.get('Review'),
-        'Description': track.get('Description'),
         'Loved': bool(
             config.PREVIOUS_LOVE and track.get('FavouriteCount', 0) >= 3
         ),

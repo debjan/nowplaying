@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS tracks (
   album_id    INTEGER REFERENCES albums(id),
   artist_id   INTEGER NOT NULL REFERENCES artists(id),
   duration    INTEGER,
-  description TEXT
+  mbid        TEXT
 );
 
 CREATE TABLE IF NOT EXISTS favourites (
@@ -76,7 +76,7 @@ CREATE INDEX IF NOT EXISTS idx_history_track_id ON history(track_id);
 # This is the single place a schema evolution is expressed - there is no
 # separate versioned migration list.
 _EXTRA_COLUMNS: dict[str, dict[str, str]] = {
-    'tracks': {'description': 'TEXT'},
+    'tracks': {'mbid': 'TEXT'},
 }
 
 
@@ -161,7 +161,7 @@ def resolve_track(
     duration: int | None = None,
     release_group_id: str | None = None,
     review: str | None = None,
-    description: str | None = None,
+    mbid: str | None = None,
 ) -> int:
     """Upsert artist/album/track and return the stable `track_id` (no commit)."""
 
@@ -201,8 +201,8 @@ def resolve_track(
         if existing:
             conn.execute(
                 'UPDATE tracks SET duration = COALESCE(?, duration), '
-                'description = COALESCE(?, description) WHERE id = ?',
-                (duration, description, existing[0]),
+                'mbid = COALESCE(?, mbid) WHERE id = ?',
+                (duration, mbid, existing[0]),
             )
             _fold_placeholder(conn, title, artist_id, existing[0])
             return existing[0]
@@ -215,20 +215,20 @@ def resolve_track(
         if row:
             conn.execute(
                 'UPDATE tracks SET album_id = ?, duration = COALESCE(?, duration), '
-                'description = COALESCE(?, description) WHERE id = ?',
-                (album_id, duration, description, row[0]),
+                'mbid = COALESCE(?, mbid) WHERE id = ?',
+                (album_id, duration, mbid, row[0]),
             )
             return row[0]
 
         conn.execute(
             """
-            INSERT INTO tracks(title, album_id, artist_id, duration, description)
+            INSERT INTO tracks(title, album_id, artist_id, duration, mbid)
             VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(title, album_id, artist_id) DO UPDATE SET
-                duration    = COALESCE(excluded.duration, tracks.duration),
-                description = COALESCE(excluded.description, tracks.description)
+                duration = COALESCE(excluded.duration, tracks.duration),
+                mbid     = COALESCE(excluded.mbid, tracks.mbid)
             """,
-            (title, album_id, artist_id, duration, description),
+            (title, album_id, artist_id, duration, mbid),
         )
         track_id = conn.execute(
             'SELECT id FROM tracks WHERE title = ? AND album_id = ? AND artist_id = ?',
@@ -244,14 +244,14 @@ def resolve_track(
         if row:
             conn.execute(
                 'UPDATE tracks SET duration = COALESCE(?, duration), '
-                'description = COALESCE(?, description) WHERE id = ?',
-                (duration, description, row[0]),
+                'mbid = COALESCE(?, mbid) WHERE id = ?',
+                (duration, mbid, row[0]),
             )
             return row[0]
         cur = conn.execute(
-            'INSERT INTO tracks(title, album_id, artist_id, duration, description) '
+            'INSERT INTO tracks(title, album_id, artist_id, duration, mbid) '
             'VALUES (?, NULL, ?, ?, ?)',
-            (title, artist_id, duration, description),
+            (title, artist_id, duration, mbid),
         )
         track_id = cur.lastrowid
     assert track_id is not None
@@ -272,6 +272,12 @@ def _fold_placeholder(
         )
     ]
     for placeholder_id in placeholders:
+        # Keep a MusicBrainz id that only the placeholder managed to resolve.
+        conn.execute(
+            'UPDATE tracks SET mbid = COALESCE(mbid, '
+            '(SELECT mbid FROM tracks WHERE id = ?)) WHERE id = ?',
+            (placeholder_id, target_id),
+        )
         for table in ('skips', 'favourites'):
             conn.execute(
                 f'INSERT INTO {table}(track_id, count) '
@@ -296,6 +302,21 @@ def stored_duration(conn: sqlite3.Connection, artist: str, title: str) -> int | 
         SELECT t.duration
         FROM tracks t JOIN artists a ON a.id = t.artist_id
         WHERE a.title = ? AND t.title = ? AND t.duration IS NOT NULL
+        ORDER BY t.id DESC LIMIT 1
+        """,
+        (_normalize(artist), _normalize(title)),
+    ).fetchone()
+    return row[0] if row else None
+
+
+def mbid_for(conn: sqlite3.Connection, artist: str, title: str) -> str | None:
+    """Return any previously stored recording MBID for a track, or None."""
+
+    row = conn.execute(
+        """
+        SELECT t.mbid
+        FROM tracks t JOIN artists a ON a.id = t.artist_id
+        WHERE a.title = ? AND t.title = ? AND t.mbid IS NOT NULL
         ORDER BY t.id DESC LIMIT 1
         """,
         (_normalize(artist), _normalize(title)),
@@ -449,7 +470,7 @@ _CURRENT_SQL = """
 SELECT a.title AS Artist, al.title AS Album, t.title AS Title,
        al.id AS AlbumId, al.cover_url AS CoverUrl, t.id AS TrackId,
        COALESCE(f.count, 0) AS FavouriteCount, t.duration AS Duration,
-       al.review AS Review, t.description AS Description
+       al.review AS Review, t.mbid AS Mbid
 FROM history h
 JOIN tracks t ON t.id = h.track_id
 LEFT JOIN albums al ON al.id = t.album_id
@@ -458,6 +479,14 @@ LEFT JOIN favourites f ON f.track_id = t.id
 WHERE h.auto_skipped = 0
 ORDER BY h.id DESC
 LIMIT 1
+"""
+
+_TRACK_SQL = """
+SELECT a.title AS Artist, al.title AS Album, t.title AS Title, t.mbid AS Mbid
+FROM tracks t
+LEFT JOIN albums al ON al.id = t.album_id
+JOIN artists a ON a.id = t.artist_id
+WHERE t.id = ?
 """
 
 async def _adb(db_path: str) -> aiosqlite.Connection:
@@ -546,7 +575,21 @@ async def aget_current(db_path: str) -> dict | None:
         'FavouriteCount': track[6],
         'Duration': track[7],
         'Review': track[8],
-        'Description': track[9],
+        'MBID': track[9],
+    }
+
+
+async def aget_track(db_path: str, track_id: int) -> dict | None:
+    """Return one track row (`Artist`/`Album`/`Title`/`MBID`), or None."""
+
+    track = await _afetchone(db_path, _TRACK_SQL, (track_id,))
+    if track is None:
+        return None
+    return {
+        'Artist': track[0],
+        'Album': track[1],
+        'Title': track[2],
+        'MBID': track[3],
     }
 
 
