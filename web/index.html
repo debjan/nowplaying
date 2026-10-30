@@ -2,9 +2,15 @@
 <html>
 <head>
     <title>Now Playing</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <link rel="stylesheet" href="style.css">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#1D2021">
+    <meta name="description" content="Now Playing - live track metadata from any media app.">
+    <link rel="manifest" href="/manifest.webmanifest">
     <link rel="icon" type="image/svg+xml" href="favicon">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <link rel="stylesheet" href="style.css">
     <script>
         (function () {
             // Apply the theme before first paint: user choice, else the OS scheme.
@@ -110,6 +116,13 @@
         </div>
     </div>
     <script>
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/sw.js').catch((err) => {
+                    console.error('Service worker registration failed:', err);
+                });
+            });
+        }
         const source = new EventSource('/api/track/stream');
         window.addEventListener('DOMContentLoaded', () => {
             const trackEl = document.getElementById('track');

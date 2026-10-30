@@ -25,11 +25,18 @@ from PIL import Image
 
 from nowplaying import config, db, listenbrainz
 
-WEB_DIR = Path(__file__).resolve().parent.parent.parent / 'web'
+ROOT_DIR = Path(__file__).resolve().parent.parent.parent
+WEB_DIR = ROOT_DIR / 'web'
 INDEX = WEB_DIR / 'index.html'
 CSS = WEB_DIR / 'style.css'
 COVER_SVG = WEB_DIR / 'cover.svg'
 THEMES_DIR = WEB_DIR / 'themes'
+PWA_DIR = WEB_DIR / 'PWA'
+MANIFEST = PWA_DIR / 'manifest.webmanifest'
+SW = PWA_DIR / 'sw.js'
+ICON_FILES = {192: 'icon-192.png', 512: 'icon-512.png'}
+# Manifest screenshot (narrow/portrait) for the richer install sheet.
+SCREENSHOT = ROOT_DIR / 'img' / 'screenshot.png'
 
 PLAYERCTL_ACTIONS = frozenset({'play-pause', 'next', 'previous'})
 
@@ -334,6 +341,73 @@ async def css(request: Request) -> Response:
     )
 
 
+@app.get('/manifest.webmanifest')
+async def web_manifest(request: Request) -> Response:
+    """Serve the PWA web app manifest."""
+    loaded = await _load_asset(MANIFEST)
+    if loaded is None:
+        return Response(status_code=404, content='Manifest not found')
+    etag, content = loaded
+    if _not_modified(request, etag):
+        return _not_modified_response(etag)
+    return Response(
+        content=content,
+        media_type='application/manifest+json',
+        headers={'Cache-Control': 'public, max-age=3600', 'ETag': etag},
+    )
+
+
+@app.get('/sw.js')
+async def service_worker(request: Request) -> Response:
+    """Serve the PWA service worker; no-cache so a new worker deploys at once."""
+    loaded = await _load_asset(SW)
+    if loaded is None:
+        return Response(status_code=404, content='Service worker not found')
+    etag, content = loaded
+    if _not_modified(request, etag):
+        return _not_modified_response(etag)
+    return Response(
+        content=content,
+        media_type='application/javascript',
+        headers={'Cache-Control': 'no-cache', 'ETag': etag},
+    )
+
+
+@app.get('/icon/{size:int}.png')
+async def icon(size: int, request: Request) -> Response:
+    """Serve a PWA install icon (192/512 - keys of ICON_FILES)."""
+    filename = ICON_FILES.get(size)
+    if filename is None:
+        return Response(status_code=404, content='Icon not found')
+    loaded = await _load_asset(PWA_DIR / filename)
+    if loaded is None:
+        return Response(status_code=404, content='Icon not found')
+    etag, content = loaded
+    if _not_modified(request, etag):
+        return _not_modified_response(etag)
+    return Response(
+        content=content,
+        media_type='image/png',
+        headers={'Cache-Control': 'public, max-age=86400', 'ETag': etag},
+    )
+
+
+@app.get('/screenshot.png')
+async def screenshot(request: Request) -> Response:
+    """Serve the manifest screenshot (narrow install sheet preview)."""
+    loaded = await _load_asset(SCREENSHOT)
+    if loaded is None:
+        return Response(status_code=404, content='Screenshot not found')
+    etag, content = loaded
+    if _not_modified(request, etag):
+        return _not_modified_response(etag)
+    return Response(
+        content=content,
+        media_type='image/png',
+        headers={'Cache-Control': 'public, max-age=86400', 'ETag': etag},
+    )
+
+
 @app.get('/themes/{filename}')
 async def theme(filename: str, request: Request) -> Response:
     if (
@@ -390,6 +464,7 @@ async def themes() -> list[dict[str, str | None]]:
 
 
 @app.get('/cover.svg')
+@app.get('/favicon')
 async def cover() -> Response:
     try:
         async with aiofiles.open(COVER_SVG, 'rb') as f:
@@ -415,16 +490,6 @@ async def cover_png() -> Response:
         path,
         media_type='image/png',
         headers={'Cache-Control': 'public, max-age=604800, immutable'},
-    )
-
-
-@app.get('/favicon')
-async def favicon() -> Response:
-    content = '<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256"><rect width="256" height="256" fill="none"/><line x1="48" y1="96" x2="48" y2="160" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="24"/><line x1="88" y1="32" x2="88" y2="224" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="24"/><line x1="128" y1="64" x2="128" y2="192" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="24"/><line x1="168" y1="96" x2="168" y2="160" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="24"/><line x1="208" y1="80" x2="208" y2="176" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="24"/></svg>'
-    return Response(
-        content=content,
-        media_type='image/svg+xml',
-        headers={'Cache-Control': 'public, max-age=86400'},
     )
 
 

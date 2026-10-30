@@ -20,6 +20,14 @@ body {
     align-items: center;
     justify-content: center;
     margin: 0;
+    /* Installed/standalone on iOS draws under the status bar and the notch
+       (viewport-fit=cover + black-translucent), so inset the shell. */
+    box-sizing: border-box;
+    padding:
+        env(safe-area-inset-top)
+        env(safe-area-inset-right)
+        env(safe-area-inset-bottom)
+        env(safe-area-inset-left);
 }
 
 body.no-scroll {
