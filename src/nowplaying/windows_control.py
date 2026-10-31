@@ -31,7 +31,7 @@ async def _get_session():
 
 
 async def control(action: str) -> None:
-    """Control the current media session: play-pause, next, or previous."""
+    """Control the current media session: play-pause, pause, next, or previous."""
 
     session = await _get_session()
     if session is None:
@@ -40,6 +40,8 @@ async def control(action: str) -> None:
     try:
         if action == 'play-pause':
             await session.try_toggle_play_pause_async()
+        elif action == 'pause':
+            await session.try_pause_async()
         elif action == 'next':
             await session.try_skip_next_async()
         elif action == 'previous':

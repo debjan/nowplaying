@@ -21,6 +21,7 @@ from fastapi.responses import (
     PlainTextResponse,
     StreamingResponse,
 )
+from loguru import logger
 from PIL import Image
 
 from nowplaying import config, db, listenbrainz
@@ -38,7 +39,7 @@ ICON_FILES = {192: 'icon-192.png', 512: 'icon-512.png'}
 # Manifest screenshot (narrow/portrait) for the richer install sheet.
 SCREENSHOT = ROOT_DIR / 'img' / 'screenshot.png'
 
-PLAYERCTL_ACTIONS = frozenset({'play-pause', 'next', 'previous'})
+PLAYERCTL_ACTIONS = frozenset({'play-pause', 'next', 'previous', 'pause'})
 
 # ListenBrainz "similar" dialogs: how many rows to return by default/max.
 SIMILAR_LIMIT_DEFAULT = 12
@@ -51,11 +52,22 @@ if config.SOURCE == 'windows':
 else:
     PLAYERCTL_AVAILABLE = shutil.which('playerctl') is not None
 
-_ACCENT_RE = re.compile(r'--accent\s*:\s*(#[0-9a-fA-F]{3,8})')
-
 # Dynamic themes: their palettes are derived from the current album cover's
 # average color (see `_adaptive_palette`) instead of a static CSS file.
 ADAPTIVE_THEMES = frozenset({'adaptive-light.css', 'adaptive-dark.css'})
+
+THEME = ''
+if config.THEME:
+    if (
+        config.THEME in {name.removesuffix('.css') for name in ADAPTIVE_THEMES}
+        or (
+            re.fullmatch(r'[a-z0-9-]+', config.THEME) is not None
+            and (THEMES_DIR / f'{config.THEME}.css').is_file()
+        )
+    ):
+        THEME = config.THEME
+    else:
+        logger.warning(f'[web] unknown THEME {config.THEME!r}; using the adaptive theme')
 
 _ADAPTIVE_FALLBACKS = {
     'adaptive-dark.css': {
@@ -230,6 +242,10 @@ async def _adaptive_asset(name: str) -> tuple[str, bytes]:
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
     yield
+    if _sleep_task is not None:
+        _sleep_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await _sleep_task
     if _broadcaster_task is not None:
         _broadcaster_task.cancel()
         with suppress(asyncio.CancelledError):
@@ -264,6 +280,17 @@ def _not_modified(request: Request, etag: str) -> bool:
 
 def _not_modified_response(etag: str) -> Response:
     return Response(status_code=304, headers={'ETag': etag, 'Cache-Control': 'no-cache'})
+
+
+_THEME_META = b'<meta name="nowplaying-theme" content="">'
+
+
+def _themed_index(etag: str, content: bytes) -> tuple[str, bytes]:
+    """Inject the configured theme into the served HTML; cache-bust the ETag."""
+    if not THEME:
+        return etag, content
+    meta = f'<meta name="nowplaying-theme" content="{THEME}">'.encode()
+    return f'{etag[:-1]}-{THEME}"', content.replace(_THEME_META, meta)
 
 
 def _playerctl_cmd(action: str) -> list[str]:
@@ -317,6 +344,7 @@ async def index(request: Request) -> Response:
     if loaded is None:
         return HTMLResponse('<h1>Home page not found</h1>', status_code=404)
     etag, content = loaded
+    etag, content = _themed_index(etag, content)
     if _not_modified(request, etag):
         return _not_modified_response(etag)
     return Response(
@@ -432,35 +460,6 @@ async def theme(filename: str, request: Request) -> Response:
         media_type='text/css',
         headers={'Cache-Control': 'no-cache', 'ETag': etag},
     )
-
-
-@app.get('/api/themes')
-async def themes() -> list[dict[str, str | None]]:
-    try:
-        names = await aiofiles.os.listdir(THEMES_DIR)
-    except OSError:
-        return []
-    result: list[dict[str, str | None]] = []
-    for name in sorted(names):
-        if not name.endswith('.css') or name.startswith('.'):
-            continue
-        if name in ADAPTIVE_THEMES:  # generated dynamically below
-            continue
-        try:
-            async with aiofiles.open(THEMES_DIR / name, 'r', encoding='utf-8') as f:
-                content = await f.read()
-        except OSError:
-            content = ''
-        match = _ACCENT_RE.search(content)
-        result.append({
-            'name': name.removesuffix('.css'),
-            'accent': match.group(1) if match else None,
-        })
-    for name in sorted(ADAPTIVE_THEMES):
-        accent = (await _adaptive_palette_cached(name))['accent']
-        result.append({'name': name.removesuffix('.css'), 'accent': accent})
-    result.sort(key=lambda item: item['name'] or '')
-    return result
 
 
 @app.get('/cover.svg')
@@ -641,6 +640,14 @@ _broadcaster_lock = asyncio.Lock()
 _last_track_event: str | None = None
 _last_position_event: str | None = None
 _last_status_event: str | None = None
+_last_sleep_event: str | None = None
+
+# Sleep timer state. It lives in the web process (not in the page) so a
+# backgrounded phone, a reload or a second client all see the same timer and
+# the pause happens even when no tab is awake. `Mode` is the armed mode
+# (`15`/`30`/`60`/`end`), `EndsAt` an epoch-ms deadline (None for end-of-song).
+_sleep_state: dict[str, object] = {'Mode': None, 'EndsAt': None}
+_sleep_task: asyncio.Task[None] | None = None
 
 
 def _publish(event: str) -> None:
@@ -725,6 +732,7 @@ async def track_stream() -> StreamingResponse:
                 _last_track_event,
                 _last_position_event,
                 _last_status_event,
+                _last_sleep_event,
             ):
                 if snapshot is not None:
                     yield snapshot
@@ -792,6 +800,136 @@ async def player_position() -> dict:
     if stored is None:
         raise HTTPException(status_code=404, detail='No position yet') from None
     return {'Position': stored[0]}
+
+
+# --- Sleep timer ------------------------------------------------------------
+
+SLEEP_MINUTES = {'15': 15, '30': 30, '60': 60}
+SLEEP_MODES = frozenset({*SLEEP_MINUTES, 'end'})
+
+_SLEEP_POLL_SECONDS = 1.0
+
+
+def _sleep_payload() -> dict[str, object]:
+    return dict(_sleep_state)
+
+
+def _publish_sleep() -> None:
+    global _last_sleep_event
+    _last_sleep_event = 'event: sleep\ndata: ' + json.dumps(_sleep_payload()) + '\n\n'
+    _publish(_last_sleep_event)
+
+
+def _set_sleep_state(mode: str | None, ends_at: int | None) -> None:
+    _sleep_state.update({'Mode': mode, 'EndsAt': ends_at})
+
+
+def _disarm_sleep() -> None:
+    global _sleep_task
+    _sleep_task = None
+    _set_sleep_state(None, None)
+    _publish_sleep()
+
+
+async def _current_track_id() -> int | None:
+    try:
+        track = await read_track()
+    except (OSError, sqlite3.Error):
+        return None
+    track_id = track.get('TrackId') if track else None
+    return track_id if isinstance(track_id, int) else None
+
+
+async def _reached_track_end(track: dict | None) -> bool:
+    """Whether the stored position reports the current track at its end.
+
+    The position is polled every ~10s, so this only acts as a safety net for
+    players that repeat one track (which writes no new `history` row).
+    """
+    if not (duration := track.get('Duration') if track else None):
+        return False
+    try:
+        position = await db.aget_position(config.DB_PATH)
+    except (OSError, sqlite3.Error):
+        return False
+    return position is not None and position[0] >= int(duration) - 500
+
+
+async def _wait_for_track_end() -> None:
+    """Block until the current track ends (a different track starts)."""
+    try:
+        baseline_history, _ = await db.alatest_change_token(config.DB_PATH)
+    except (OSError, sqlite3.Error):
+        baseline_history = None
+    baseline_track = await _current_track_id()
+    while True:
+        await asyncio.sleep(_SLEEP_POLL_SECONDS)
+        try:
+            history, _ = await db.alatest_change_token(config.DB_PATH)
+        except (OSError, sqlite3.Error):
+            continue
+        if history is not None and history != baseline_history:
+            return
+        track: dict | None = None
+        with suppress(OSError, sqlite3.Error):
+            track = await read_track()
+        if baseline_track is not None and track and track.get('TrackId') != baseline_track:
+            return
+        if await _reached_track_end(track):
+            return
+
+
+async def _sleep_loop(mode: str) -> None:
+    try:
+        if mode == 'end':
+            await _wait_for_track_end()
+        else:
+            await asyncio.sleep(SLEEP_MINUTES[mode] * 60)
+        _disarm_sleep()
+        try:
+            await run_playerctl('pause')
+        except FileNotFoundError:
+            logger.warning('[sleep] playerctl not installed; cannot pause playback')
+        except (OSError, RuntimeError) as exc:
+            logger.debug(f'[sleep] pause failed: {exc}')
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # never leave a stale armed state behind
+        logger.debug(f'[sleep] watcher failed: {exc}')
+        _disarm_sleep()
+
+
+async def _arm_sleep(mode: str) -> dict[str, object]:
+    """Arm (or replace) the timer; `off` disarms it. Returns the new state."""
+    global _sleep_task
+    previous, _sleep_task = _sleep_task, None
+    if previous is not None:
+        previous.cancel()
+        with suppress(asyncio.CancelledError):
+            await previous
+    if mode == 'off':
+        _set_sleep_state(None, None)
+    else:
+        minutes = SLEEP_MINUTES.get(mode)
+        ends_at = int(time.time() * 1000) + minutes * 60_000 if minutes else None
+        _set_sleep_state(mode, ends_at)
+        _sleep_task = asyncio.create_task(_sleep_loop(mode))
+    _publish_sleep()
+    return _sleep_payload()
+
+
+@app.get('/api/sleep')
+async def sleep_state() -> dict[str, object]:
+    """Current sleep timer state (`Mode`/`EndsAt`; both None when disarmed)."""
+    return _sleep_payload()
+
+
+@app.post('/api/sleep/{mode}')
+async def sleep(mode: str) -> dict[str, object]:
+    """Arm (`15`/`30`/`60`/`end`) or cancel (`off`) the sleep timer."""
+    if mode not in SLEEP_MODES and mode != 'off':
+        raise HTTPException(status_code=400, detail=f'Invalid sleep mode: {mode}')
+    return await _arm_sleep(mode)
 
 
 def main() -> None:

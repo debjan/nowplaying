@@ -1,5 +1,3 @@
-@import "themes/catppuccin-mocha.css";
-
 /* Theme Variables */
 
 :root {
@@ -68,6 +66,7 @@ span.centered {
 
 .header-container {
     display: flex;
+    align-items: center;
     justify-content: space-between;
 }
 
@@ -335,44 +334,59 @@ span.centered {
     }
 }
 
-/* Theme Picker */
+/* Header Picker (sleep timer) */
 
-.theme {
-    display: flex;
-    align-items: center;
-}
-
-.theme-picker {
+.picker {
     position: relative;
 }
 
-.theme-btn {
+.picker-btn {
     display: flex;
     align-items: center;
-    gap: 0.25rem;
-    background: transparent;
+    gap: 0.3rem;
+    background: none;
+    border: none;
     color: var(--foreground-color);
-    border: 1px solid var(--shadow-color);
-    border-radius: 6px;
-    padding: 0.15rem 0.35rem;
+    padding: 0.35rem 0.5rem;
     font-family: inherit;
     font-size: 1rem;
     line-height: 1;
     cursor: pointer;
+    transition: transform 0.1s ease, color 0.1s ease;
 }
 
-.theme-btn:hover,
-.theme-btn:focus-visible {
-    border-color: var(--accent-color);
+.picker-btn:active {
+    transform: scale(0.85);
+}
+
+@media (hover: hover) {
+    .picker-btn:hover {
+        color: var(--accent-color);
+    }
+}
+
+.picker-btn:focus-visible {
+    color: var(--accent-color);
     outline: none;
 }
 
-.theme-dot {
-    font-size: 0.9rem;
-    line-height: 1;
+.picker-btn.armed {
+    color: var(--accent-color);
 }
 
-.theme-menu {
+.picker-icon {
+    display: block;
+    width: 1.4rem;
+    height: 1.4rem;
+    fill: none;
+}
+
+.picker-label {
+    font-size: 0.8rem;
+    font-variant-numeric: tabular-nums;
+}
+
+.picker-menu {
     position: absolute;
     top: calc(100% + 4px);
     right: 0;
@@ -387,7 +401,7 @@ span.centered {
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
 }
 
-.theme-menu li {
+.picker-menu li {
     display: flex;
     align-items: center;
     gap: 0.4rem;
@@ -399,18 +413,18 @@ span.centered {
     white-space: nowrap;
 }
 
-.theme-menu li:hover {
+/* `display: flex` above would otherwise beat the UA `[hidden]` rule. */
+.picker-menu li[hidden] {
+    display: none;
+}
+
+.picker-menu li:hover {
     background: color-mix(in srgb, var(--background-color), var(--foreground-color) 10%);
 }
 
-.theme-menu li.selected {
+.picker-menu li[aria-checked="true"] {
     font-weight: 700;
-}
-
-.menu-dot {
-    font-size: 0.7rem;
-    line-height: 1;
-    flex-shrink: 0;
+    color: var(--accent-color);
 }
 
 /* Review Popup */

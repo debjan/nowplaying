@@ -21,6 +21,8 @@ over on first run so history isn't orphaned:
     YT_DLP             allow the yt-dlp album-art fallback (1/true/yes/on)
     SKIP_FOREVER       auto-skip tracks skipped >= 3 times (1/true/yes/on)
     PREVIOUS_LOVE      show a heart for tracks Previous-ed >= 3 times while playing
+    THEME              UI theme file from web/themes, e.g. `tokio-night` or `tokio-night.css`
+                       (default empty = adaptive dark/light following the OS scheme)
     LISTENBRAINZ_USER_AGENT  contact User-Agent for the ListenBrainz API
 """
 
@@ -125,6 +127,7 @@ def _port() -> int:
 HOST = get_env('NOWPLAYING_HOST', '0.0.0.0')
 SKIP_FOREVER = get_env('SKIP_FOREVER', '').strip().lower() in ('1', 'true', 'yes', 'on')
 PREVIOUS_LOVE = get_env('PREVIOUS_LOVE', '').strip().lower() in ('1', 'true', 'yes', 'on')
+THEME = get_env('THEME', '').strip().lower().removesuffix('.css')
 DEBUG = get_env('NOWPLAYING_DEBUG', '').strip().lower() in ('1', 'true', 'yes', 'on')
 PORT = _port()
 PLAYERCTL_PLAYER = get_env('PLAYERCTL_PLAYER')

@@ -94,6 +94,7 @@ All knobs are env vars (real env -> `.env` -> defaults). See `.env.example`.
 | `PREVIOUS_LOVE`                       | *(off)*                                | Show a heart for tracks Previous-ed via 3+ times              |
 | `PLAYERCTL_PLAYER`                    | *(empty)*                              | Hardcode MPRIS player if needed                               |
 | `NOWPLAYING_DEBUG`                    | *(off)*                                | Verbose logging to `NOWPLAYING_DEBUG_LOG`                     |
+| `THEME`                               | *(empty)*                              | Selected theme instead default adaptive theme                 |
 
 ## HTTP API
 

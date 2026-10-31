@@ -4,6 +4,7 @@
     <title>Now Playing</title>
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <meta name="theme-color" content="#1D2021">
+    <meta name="nowplaying-theme" content="">
     <meta name="description" content="Now Playing - live track metadata from any media app.">
     <link rel="manifest" href="/manifest.webmanifest">
     <link rel="icon" type="image/svg+xml" href="favicon">
@@ -39,13 +40,15 @@
             meta.content = background;
         }
         (function () {
-            // Apply the theme before first paint: user choice, else the OS scheme.
-            let name = localStorage.getItem('theme');
-            if (!name || !/^[a-z0-9-]+$/i.test(name)) {
-                name = window.matchMedia('(prefers-color-scheme: light)').matches
+            // Apply the theme before first paint: the server-injected `THEME`
+            // when configured, else the adaptive palette matching the OS scheme.
+            const meta = document.querySelector('meta[name="nowplaying-theme"]');
+            const configured = (meta && meta.content) || '';
+            const name = configured || (
+                window.matchMedia('(prefers-color-scheme: light)').matches
                     ? 'adaptive-light'
-                    : 'adaptive-dark';
-            }
+                    : 'adaptive-dark'
+            );
             const link = document.createElement('link');
             link.rel = 'stylesheet';
             link.href = `themes/${name}.css`;
@@ -69,13 +72,18 @@
     <div class="card">
         <div class="header-container">
             <h1>Now Playing</h1>
-            <div class="theme">
-                <div class="theme-picker">
-                    <button type="button" id="theme-btn" class="theme-btn" aria-haspopup="listbox" aria-expanded="false" title="Theme">
-                        <span id="theme-dot" class="theme-dot">⬤</span>
-                    </button>
-                    <ul id="theme-menu" class="theme-menu" role="listbox" hidden></ul>
-                </div>
+            <div class="picker">
+                <button type="button" id="sleep-btn" class="picker-btn" aria-haspopup="menu" aria-expanded="false" title="Sleep timer">
+                    <svg class="picker-icon"><use href="#icon-sleep"/></svg>
+                    <span id="sleep-label" class="picker-label"></span>
+                </button>
+                <ul id="sleep-menu" class="picker-menu" role="menu" hidden>
+                    <li role="menuitemradio" data-mode="15" aria-checked="false">15 min</li>
+                    <li role="menuitemradio" data-mode="30" aria-checked="false">30 min</li>
+                    <li role="menuitemradio" data-mode="60" aria-checked="false">60 min</li>
+                    <li role="menuitemradio" data-mode="end" aria-checked="false">End of song</li>
+                    <li role="menuitemradio" data-mode="off" aria-checked="false" hidden>Off</li>
+                </ul>
             </div>
         </div>
         <div class="main">
@@ -134,6 +142,16 @@
                 <line x1="208" y1="72" x2="80" y2="104" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/>
                 <polyline points="80 196 80 56 208 24 208 164" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/>
             </symbol>
+            <symbol id="icon-sleep" viewBox="0 0 256 256"><rect width="256" height="256" fill="none" stroke="none"/>
+                <path d="M224,136c-4.07,49.28-45.67,88-96,88a96,96,0,0,1-96-96c0-50.33,38.72-91.93,88-96"
+                    fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"
+                    stroke-width="16" />
+                <polyline points="128 72 128 128 184 128" fill="none" stroke="currentColor"
+                    stroke-linecap="round" stroke-linejoin="round" stroke-width="16" />
+                <circle cx="160" cy="36" r="12" fill="currentColor" stroke="none" />
+                <circle cx="196" cy="60" r="12" fill="currentColor" stroke="none" />
+                <circle cx="220" cy="96" r="12" fill="currentColor" stroke="none" />
+            </symbol>
             <symbol id="icon-love" width="24" height="24" viewBox="0 0 256 256"><rect width="256" height="256" fill="none" stroke="none"/>
                 <path d="M240,102c0,70-103.79,126.66-108.21,129a8,8,0,0,1-7.58,0C119.79,228.66,16,172,16,102A62.07,62.07,0,0,1,78,40c20.65,0,38.73,8.88,50,23.89C139.27,48.88,157.35,40,178,40A62.07,62.07,0,0,1,240,102Z"/>
             </symbol>
@@ -164,9 +182,6 @@
         window.addEventListener('DOMContentLoaded', () => {
             const trackEl = document.getElementById('track');
             const artEl = document.getElementById('art');
-            const themeBtn = document.getElementById('theme-btn');
-            const themeDot = document.getElementById('theme-dot');
-            const themeMenu = document.getElementById('theme-menu');
             const controls = document.querySelector('.controls');
             const progress = document.getElementById('progress');
             
@@ -178,31 +193,15 @@
                 progress.hidden = true;
             }
 
-            // Restore a saved theme if the user picked one; otherwise follow the
-            // OS color scheme (adaptive-dark / adaptive-light) while unpicked.
-            const savedTheme = localStorage.getItem('theme') || '';
-            // Whether a theme was explicitly picked (persisted) — saved at load
-            // or during this session; OS scheme changes must not stomp a pick.
-            let userPicked = Boolean(savedTheme);
-            // Adaptive themes are generated server-side from the album cover;
-            // they are re-fetched (cache-busted by the cover version) on change.
+            const themeMeta = document.querySelector('meta[name="nowplaying-theme"]');
+            const configuredTheme = (themeMeta && themeMeta.content) || '';
             const ADAPTIVE_THEMES = new Set(['adaptive-dark', 'adaptive-light']);
             const osLight = window.matchMedia('(prefers-color-scheme: light)');
-            const defaultSaved = osLight.matches ? 'adaptive-light' : 'adaptive-dark';
-            let currentTheme = savedTheme || defaultSaved;
+            let currentTheme = configuredTheme
+                || (osLight.matches ? 'adaptive-light' : 'adaptive-dark');
             let lastArtVersion = null;
-            // Latest `accent` per theme from `/api/themes` (adaptive entries are
-            // regenerated per album, so this map is refreshed on cover changes).
-            const themeAccents = new Map();
 
-            function themeLabel(name) {
-                return name
-                    .split('-')
-                    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-                    .join(' ');
-            }
-
-            function applyTheme(name, version, persist = true) {
+            function applyTheme(name, version) {
                 let link = document.getElementById('theme-override');
                 if (!link) {
                     link = document.createElement('link');
@@ -222,123 +221,15 @@
                     syncThemeColor();
                 }
                 currentTheme = name;
-                if (persist) {
-                    localStorage.setItem('theme', name);
-                }
             }
 
-            function closeMenu() {
-                themeMenu.hidden = true;
-                themeBtn.setAttribute('aria-expanded', 'false');
-            }
-
-            function toggleMenu() {
-                themeMenu.hidden = !themeMenu.hidden;
-                themeBtn.setAttribute('aria-expanded', String(!themeMenu.hidden));
-            }
-
-            function setThemeDot(accent) {
-                themeDot.style.color = accent || 'var(--accent-color)';
-            }
-
-            function selectTheme(name, accent, persist = true) {
-                applyTheme(name, ADAPTIVE_THEMES.has(name) ? lastArtVersion : null, persist);
-                userPicked = persist;
-                setThemeDot(accent);
-                themeBtn.title = themeLabel(name);
-                themeMenu.querySelectorAll('li').forEach((li) => {
-                    li.classList.toggle('selected', li.dataset.theme === name);
+            // Follow OS light/dark only when no fixed theme is configured.
+            if (!configuredTheme) {
+                osLight.addEventListener('change', (e) => {
+                    const name = e.matches ? 'adaptive-light' : 'adaptive-dark';
+                    applyTheme(name, lastArtVersion);
                 });
             }
-
-            function collectThemes(themes) {
-                themeMenu.innerHTML = '';
-                for (const item of themes) {
-                    const name = typeof item === 'string' ? item : item && item.name;
-                    if (!name) continue;
-                    const accent = (item && item.accent) || null;
-                    themeAccents.set(name, accent);
-                    const li = document.createElement('li');
-                    li.dataset.theme = name;
-                    li.role = 'option';
-                    const dot = document.createElement('span');
-                    dot.className = 'menu-dot';
-                    dot.textContent = '⬤';
-                    dot.style.color = accent || 'var(--accent-color)';
-                    const label = document.createElement('span');
-                    label.textContent = themeLabel(name);
-                    li.append(dot, label);
-                    li.addEventListener('click', () => {
-                        selectTheme(name, themeAccents.get(name) || null);
-                        closeMenu();
-                    });
-                    themeMenu.appendChild(li);
-                }
-            }
-
-            async function loadThemes() {
-                try {
-                    const res = await fetch('/api/themes');
-                    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-                    const themes = await res.json();
-                    if (!Array.isArray(themes)) throw new Error('Unexpected response');
-                    collectThemes(themes);
-                    selectTheme(currentTheme, themeAccents.get(currentTheme) || null, Boolean(savedTheme));
-                } catch (err) {
-                    console.error('Failed to load themes:', err);
-                    themeBtn.disabled = true;
-                }
-            }
-
-            // Re-read the generated accent (the adaptive palette follows the
-            // cover) and refresh the picker dot + menu swatches in place.
-            async function refreshThemeAccents() {
-                try {
-                    const res = await fetch('/api/themes');
-                    if (!res.ok) return;
-                    const themes = await res.json();
-                    if (!Array.isArray(themes)) return;
-                    for (const item of themes) {
-                        const name = typeof item === 'string' ? item : item && item.name;
-                        if (!name) continue;
-                        const accent = (item && item.accent) || null;
-                        themeAccents.set(name, accent);
-                        const li = themeMenu.querySelector(`li[data-theme="${name}"]`);
-                        const dot = li && li.querySelector('.menu-dot');
-                        if (dot) dot.style.color = accent || 'var(--accent-color)';
-                    }
-                    if (ADAPTIVE_THEMES.has(currentTheme)) {
-                        setThemeDot(themeAccents.get(currentTheme) || null);
-                    }
-                } catch (err) {
-                    console.error('Failed to refresh theme accents:', err);
-                }
-            }
-
-            loadThemes();
-
-            themeBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                toggleMenu();
-            });
-
-            document.addEventListener('click', (e) => {
-                if (!themeBtn.closest('.theme-picker').contains(e.target)) {
-                    closeMenu();
-                }
-            });
-            document.addEventListener('keydown', (e) => {
-                if (e.key === 'Escape') closeMenu();
-            });
-
-            // Follow OS light/dark while no theme was explicitly picked
-            // (this session or a previous one).
-            osLight.addEventListener('change', (e) => {
-                if (!userPicked) {
-                    const name = e.matches ? 'adaptive-light' : 'adaptive-dark';
-                    selectTheme(name, themeAccents.get(name) || null, false);
-                }
-            });
 
             function add_span(el) {
                 const span = document.createElement('span')
@@ -416,9 +307,7 @@
                 const artVersion = data['Album Art']?.split('?v=')[1] || null;
                 if (ADAPTIVE_THEMES.has(currentTheme) && artVersion !== lastArtVersion) {
                     lastArtVersion = artVersion;
-                    applyTheme(currentTheme, artVersion, false);
-                    // The palette (and thus the picker dot) follows the cover.
-                    refreshThemeAccents();
+                    applyTheme(currentTheme, artVersion);
                 }
                 // Rebuild the track rows only when the rendered content changes;
                 // SSE re-emits the current track on every reconnect.
@@ -685,6 +574,97 @@
             btn.addEventListener('click', () => sendControl(btn.dataset.action));
         });
 
+        // --- Sleep timer ------------------------------------------------------
+        // The timer is server-owned (`POST /api/sleep/{mode}`) so it keeps
+        // counting while the phone is asleep and survives a page reload; this
+        // side only renders the state pushed over SSE.
+        const sleepBtn = document.getElementById('sleep-btn');
+        const sleepLabel = document.getElementById('sleep-label');
+        const sleepMenu = document.getElementById('sleep-menu');
+        const sleepOff = sleepMenu.querySelector('[data-mode="off"]');
+        const sleepChoices = [...sleepMenu.querySelectorAll('li[data-mode]')]
+            .filter((li) => li !== sleepOff);
+        let sleepMode = null;
+        let sleepEndsAt = null;
+
+        function closeSleepMenu() {
+            sleepMenu.hidden = true;
+            sleepBtn.setAttribute('aria-expanded', 'false');
+        }
+
+        function toggleSleepMenu() {
+            sleepMenu.hidden = !sleepMenu.hidden;
+            sleepBtn.setAttribute('aria-expanded', String(!sleepMenu.hidden));
+        }
+
+        function formatSleepRemaining(ms) {
+            const total = Math.max(0, Math.ceil(ms / 1000));
+            return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
+        }
+
+        function renderSleep() {
+            const armed = Boolean(sleepMode);
+            sleepBtn.classList.toggle('armed', armed);
+            sleepBtn.setAttribute('aria-pressed', String(armed));
+            sleepOff.hidden = !armed;
+            sleepOff.setAttribute('aria-checked', 'false');
+            for (const li of sleepChoices) {
+                li.setAttribute('aria-checked', String(li.dataset.mode === sleepMode));
+            }
+            if (!armed) {
+                sleepLabel.textContent = '';
+                sleepBtn.title = 'Sleep timer';
+                return;
+            }
+            if (sleepMode === 'end') {
+                sleepLabel.textContent = 'End';
+                sleepBtn.title = 'Sleep timer: end of song';
+                return;
+            }
+            const remaining = sleepEndsAt ? sleepEndsAt - Date.now() : 0;
+            sleepLabel.textContent = formatSleepRemaining(remaining);
+            sleepBtn.title = `Sleep timer: ${formatSleepRemaining(remaining)}`;
+        }
+
+        function applySleepState(state) {
+            sleepMode = state && state.Mode ? state.Mode : null;
+            sleepEndsAt = state && typeof state.EndsAt === 'number' ? state.EndsAt : null;
+            renderSleep();
+        }
+
+        async function setSleep(mode) {
+            try {
+                const res = await fetch(`/api/sleep/${mode}`, { method: 'POST' });
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                applySleepState(await res.json());
+            } catch (err) {
+                console.error('Failed to set the sleep timer:', err);
+            }
+        }
+
+        sleepBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            toggleSleepMenu();
+        });
+
+        sleepMenu.addEventListener('click', (e) => {
+            const li = e.target.closest('li[data-mode]');
+            if (!li) return;
+            // Selecting the armed mode again (or "Off") cancels the timer.
+            const mode = li.dataset.mode === sleepMode ? 'off' : li.dataset.mode;
+            closeSleepMenu();
+            void setSleep(mode);
+        });
+
+        document.addEventListener('click', (e) => {
+            if (!sleepBtn.closest('.picker').contains(e.target)) closeSleepMenu();
+        });
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') closeSleepMenu();
+        });
+
+        renderSleep();
+
         // --- Media Session API ----------------------------------------------
         // Publishes the track to the OS (lock screen, media keys, Bluetooth
         // headset buttons, the Windows SMTC overlay) and routes the OS controls
@@ -856,6 +836,19 @@
         });
 
         setInterval(updateProgress, 1000);
+        setInterval(renderSleep, 1000);
+
+        // Server-pushed sleep timer state: the countdown is derived from
+        // `EndsAt` locally, so the stream only fires on arm / cancel / expiry.
+        source.addEventListener('sleep', (event) => {
+            let data;
+            try {
+                data = JSON.parse(event.data);
+            } catch {
+                return;
+            }
+            applySleepState(data);
+        });
 
         source.addEventListener('position', (event) => {
             let data;
