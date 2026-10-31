@@ -12,6 +12,32 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <link rel="stylesheet" href="style.css">
     <script>
+        // One step away in the blue channel: an imperceptible colour change that
+        // Chromium still treats as a change (it compares the parsed colour).
+        function nudgeColor(color) {
+            const match = /^#([0-9a-f]{6})$/i.exec(color);
+            if (!match) return null;
+            const nudged = (parseInt(match[1], 16) ^ 1).toString(16).padStart(6, '0');
+            return `#${nudged}`;
+        }
+        function syncThemeColor(force = false) {
+            const meta = document.querySelector('meta[name="theme-color"]');
+            if (!meta) return;
+            const style = getComputedStyle(document.documentElement);
+            const background = (
+                style.getPropertyValue('--background-color') ||
+                style.getPropertyValue('--background')
+            ).trim();
+            if (!background) return;
+            if (force === true && meta.content === background) {
+                const nudged = nudgeColor(background);
+                if (!nudged) return;
+                meta.content = nudged;
+                setTimeout(() => syncThemeColor(), 16);
+                return;
+            }
+            meta.content = background;
+        }
         (function () {
             // Apply the theme before first paint: user choice, else the OS scheme.
             let name = localStorage.getItem('theme');
@@ -24,8 +50,18 @@
             link.rel = 'stylesheet';
             link.href = `themes/${name}.css`;
             link.id = 'theme-override';
+            link.onload = () => syncThemeColor();
             document.head.appendChild(link);
         })();
+        // Final catch-up once every stylesheet (style.css included) has applied.
+        window.addEventListener('load', () => syncThemeColor());
+        // Re-apply the caption colour whenever the window comes back: Chromium
+        // leaves the inactive colour behind after a focus change (see above).
+        window.addEventListener('focus', () => syncThemeColor(true));
+        window.addEventListener('pageshow', () => syncThemeColor(true));
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden) syncThemeColor(true);
+        });
     </script>
 </head>
 <body>
@@ -178,8 +214,12 @@
                     ? `themes/${name}.css?v=${version}`
                     : `themes/${name}.css`;
                 const url = new URL(href, location.href);
+                // Re-sync the browser chrome color once the new sheet applies.
+                link.onload = () => syncThemeColor();
                 if (link.href !== url.href) {
                     link.href = href;
+                } else {
+                    syncThemeColor();
                 }
                 currentTheme = name;
                 if (persist) {

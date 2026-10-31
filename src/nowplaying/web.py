@@ -467,12 +467,12 @@ async def themes() -> list[dict[str, str | None]]:
 @app.get('/favicon')
 async def cover() -> Response:
     try:
-        async with aiofiles.open(COVER_SVG, 'rb') as f:
+        async with aiofiles.open(COVER_SVG) as f:
             content = await f.read()
     except FileNotFoundError:
         return Response(status_code=404)
     return Response(
-        content=content,
+        content=content.encode(),
         media_type='image/svg+xml',
         headers={'Cache-Control': 'public, max-age=86400'},
     )
