@@ -5,6 +5,7 @@ import sqlite3
 import time
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
+from datetime import UTC, datetime
 from typing import TypeVar
 
 import aiosqlite
@@ -35,21 +36,17 @@ CREATE TABLE IF NOT EXISTS tracks (
   mbid        TEXT
 );
 
-CREATE TABLE IF NOT EXISTS favourites (
+-- The love/hate verdict: score 1 = loved, -1 = hated, 0 = withdrawn. It is the
+-- only verdict store - the thumbs render from it and the auto-skip reads it.
+CREATE TABLE IF NOT EXISTS feedback (
   id       INTEGER PRIMARY KEY AUTOINCREMENT,
   track_id INTEGER NOT NULL REFERENCES tracks(id),
-  count    INTEGER DEFAULT 0
-);
-
-CREATE TABLE IF NOT EXISTS skips (
-  id       INTEGER PRIMARY KEY AUTOINCREMENT,
-  track_id INTEGER NOT NULL REFERENCES tracks(id),
-  count    INTEGER DEFAULT 0
+  score    INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS history (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
-  timestamp    DATETIME DEFAULT CURRENT_TIMESTAMP,
+  timestamp    DATETIME DEFAULT (datetime('now', 'localtime')),
   track_id     INTEGER NOT NULL REFERENCES tracks(id),
   auto_skipped INTEGER DEFAULT 0
 );
@@ -57,12 +54,10 @@ CREATE TABLE IF NOT EXISTS history (
 CREATE TABLE IF NOT EXISTS playback (
   id          INTEGER PRIMARY KEY CHECK (id = 1),
   position_ms INTEGER NOT NULL,
-  updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+  updated_at  DATETIME DEFAULT (datetime('now', 'localtime'))
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_skips_track_id ON skips(track_id);
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_favourites_track_id ON favourites(track_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_feedback_track_id ON feedback(track_id);
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_albums_title_artist
   ON albums(title, artist_id);
@@ -79,6 +74,18 @@ _EXTRA_COLUMNS: dict[str, dict[str, str]] = {
     'tracks': {'mbid': 'TEXT'},
 }
 
+# Columns older builds wrote and nothing reads any more (`tracks.description`).
+# SQLite only gained `ALTER TABLE ... DROP COLUMN` in 3.35; on an older runtime
+# the leftover column is harmless (nullable, defaulted), so a failure is
+# ignored.
+_LEGACY_COLUMNS: dict[str, tuple[str, ...]] = {
+    'tracks': ('description',),
+}
+
+# Tables a build before the single-`feedback`-table change created. Their rows
+# are a mirror of the `feedback` verdict, so nothing is lost by dropping them.
+_LEGACY_TABLES: tuple[str, ...] = ('favourites', 'skips')
+
 
 def connect(path: str) -> sqlite3.Connection:
     """Open a WAL-mode connection with FK enforcement; creates the schema."""
@@ -89,7 +96,7 @@ def connect(path: str) -> sqlite3.Connection:
 
 
 def _ensure_columns(conn: sqlite3.Connection) -> None:
-    """Idempotently ALTER in any columns missing from pre-existing tables."""
+    """Idempotently ALTER in missing columns and drop retired columns/tables."""
 
     for table, columns in _EXTRA_COLUMNS.items():
         existing = {
@@ -98,6 +105,20 @@ def _ensure_columns(conn: sqlite3.Connection) -> None:
         for name, ddl in columns.items():
             if name not in existing:
                 conn.execute(f'ALTER TABLE {table} ADD COLUMN {name} {ddl}')
+
+    for table, columns in _LEGACY_COLUMNS.items():
+        existing = {
+            row[1] for row in conn.execute(f'PRAGMA table_info({table})')
+        }
+        for name in columns:
+            if name in existing:
+                with suppress(sqlite3.OperationalError):
+                    conn.execute(f'ALTER TABLE {table} DROP COLUMN {name}')
+
+    for table in _LEGACY_TABLES:
+        conn.execute(f'DROP TABLE IF EXISTS {table}')
+
+    _localize_history(conn)
 
 
 async def _ensure_columns_async(conn: aiosqlite.Connection) -> None:
@@ -109,6 +130,93 @@ async def _ensure_columns_async(conn: aiosqlite.Connection) -> None:
         for name, ddl in columns.items():
             if name not in existing:
                 await conn.execute(f'ALTER TABLE {table} ADD COLUMN {name} {ddl}')
+
+    for table, columns in _LEGACY_COLUMNS.items():
+        cur = await conn.execute(f'PRAGMA table_info({table})')
+        existing = {row[1] for row in await cur.fetchall()}
+        for name in columns:
+            if name in existing:
+                with suppress(sqlite3.OperationalError):
+                    await conn.execute(f'ALTER TABLE {table} DROP COLUMN {name}')
+
+    for table in _LEGACY_TABLES:
+        await conn.execute(f'DROP TABLE IF EXISTS {table}')
+
+    await _localize_history_async(conn)
+
+
+_HISTORY_LOCAL_VERSION = 1
+
+
+def _local_now() -> str:
+    """Current local wall-clock time in SQLite's `YYYY-MM-DD HH:MM:SS` format."""
+
+    return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+
+def _as_local(value: object) -> str:
+    """Read a stored timestamp as UTC and return it in local wall-clock time."""
+
+    try:
+        stamp = datetime.fromisoformat(str(value))
+    except ValueError:
+        return str(value)
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=UTC)
+    return stamp.astimezone().strftime('%Y-%m-%d %H:%M:%S')
+
+
+def _localize_history(conn: sqlite3.Connection) -> None:
+    """One-shot: rewrite `history.timestamp` values that were stored as UTC."""
+
+    if conn.execute('PRAGMA user_version').fetchone()[0] >= _HISTORY_LOCAL_VERSION:
+        return
+    conn.execute('BEGIN IMMEDIATE')
+    try:
+        if conn.execute('PRAGMA user_version').fetchone()[0] >= _HISTORY_LOCAL_VERSION:
+            conn.rollback()
+            return
+        rows = conn.execute(
+            'SELECT id, timestamp FROM history WHERE timestamp IS NOT NULL'
+        ).fetchall()
+        conn.executemany(
+            'UPDATE history SET timestamp = ? WHERE id = ?',
+            [(_as_local(stamp), row_id) for row_id, stamp in rows],
+        )
+        conn.execute(f'PRAGMA user_version = {_HISTORY_LOCAL_VERSION}')
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+
+
+async def _localize_history_async(conn: aiosqlite.Connection) -> None:
+    """Async twin of `_localize_history`."""
+
+    cur = await conn.execute('PRAGMA user_version')
+    row = await cur.fetchone()
+    if row and row[0] >= _HISTORY_LOCAL_VERSION:
+        return
+    await conn.execute('BEGIN IMMEDIATE')
+    try:
+        cur = await conn.execute('PRAGMA user_version')
+        row = await cur.fetchone()
+        if row and row[0] >= _HISTORY_LOCAL_VERSION:
+            await conn.rollback()
+            return
+        cur = await conn.execute(
+            'SELECT id, timestamp FROM history WHERE timestamp IS NOT NULL'
+        )
+        rows = await cur.fetchall()
+        await conn.executemany(
+            'UPDATE history SET timestamp = ? WHERE id = ?',
+            [(_as_local(stamp), row_id) for row_id, stamp in rows],
+        )
+        await conn.execute(f'PRAGMA user_version = {_HISTORY_LOCAL_VERSION}')
+        await conn.commit()
+    except BaseException:
+        await conn.rollback()
+        raise
 
 
 def _prepare(conn: sqlite3.Connection, attempts: int = 15) -> None:
@@ -278,15 +386,15 @@ def _fold_placeholder(
             '(SELECT mbid FROM tracks WHERE id = ?)) WHERE id = ?',
             (placeholder_id, target_id),
         )
-        for table in ('skips', 'favourites'):
-            conn.execute(
-                f'INSERT INTO {table}(track_id, count) '
-                f'SELECT ?, count FROM {table} WHERE track_id = ? '
-                f'ON CONFLICT(track_id) DO UPDATE SET count = count + excluded.count',
-                (target_id, placeholder_id),
-            )
-            # Drop the placeholder's own row so it no longer holds a dangling FK.
-            conn.execute(f'DELETE FROM {table} WHERE track_id = ?', (placeholder_id,))
+        # The verdict is a state, not a count: keep the target's score and only
+        # adopt the placeholder's when the target has none.
+        conn.execute(
+            'INSERT INTO feedback(track_id, score) '
+            'SELECT ?, score FROM feedback WHERE track_id = ? '
+            'ON CONFLICT(track_id) DO NOTHING',
+            (target_id, placeholder_id),
+        )
+        conn.execute('DELETE FROM feedback WHERE track_id = ?', (placeholder_id,))
         conn.execute(
             'UPDATE history SET track_id = ? WHERE track_id = ?',
             (target_id, placeholder_id),
@@ -386,11 +494,15 @@ def latest_cover_url(conn: sqlite3.Connection) -> str | None:
 def record_history(
     conn: sqlite3.Connection, track_id: int, auto_skipped: bool = False
 ) -> int:
-    """Insert a history row and commit; returns the new `history.id`."""
+    """Insert a history row and commit; returns the new `history.id`.
+
+    The timestamp is written explicitly in local wall-clock time - the default
+    of a pre-existing table is still SQLite's UTC `CURRENT_TIMESTAMP`.
+    """
 
     cur = conn.execute(
-        'INSERT INTO history(track_id, auto_skipped) VALUES (?, ?)',
-        (track_id, int(auto_skipped)),
+        'INSERT INTO history(track_id, auto_skipped, timestamp) VALUES (?, ?, ?)',
+        (track_id, int(auto_skipped), _local_now()),
     )
     row_id = cur.lastrowid
     assert row_id is not None
@@ -398,29 +510,24 @@ def record_history(
     return row_id
 
 
-def skip_count(conn: sqlite3.Connection, track_id: int) -> int:
-    row = conn.execute('SELECT count FROM skips WHERE track_id = ?', (track_id,)).fetchone()
-    return row[0] if row else 0
+def feedback_score(conn: sqlite3.Connection, track_id: int) -> int:
+    """Return the track's love/hate verdict (1, -1 or 0 when unrated)."""
+
+    row = conn.execute(
+        'SELECT score FROM feedback WHERE track_id = ?', (track_id,)
+    ).fetchone()
+    return int(row[0]) if row else 0
 
 
-def increment_skip(conn: sqlite3.Connection, track_id: int) -> None:
+def set_feedback(conn: sqlite3.Connection, track_id: int, score: int) -> None:
+    """Upsert the track's feedback verdict (1 = love, -1 = hate, 0 = clear)."""
+
     conn.execute(
         """
-        INSERT INTO skips(track_id, count) VALUES (?, 1)
-        ON CONFLICT(track_id) DO UPDATE SET count = count + 1
+        INSERT INTO feedback(track_id, score) VALUES (?, ?)
+        ON CONFLICT(track_id) DO UPDATE SET score = excluded.score
         """,
-        (track_id,),
-    )
-    conn.commit()
-
-
-def increment_favourite(conn: sqlite3.Connection, track_id: int) -> None:
-    conn.execute(
-        """
-        INSERT INTO favourites(track_id, count) VALUES (?, 1)
-        ON CONFLICT(track_id) DO UPDATE SET count = count + 1
-        """,
-        (track_id,),
+        (track_id, score),
     )
     conn.commit()
 
@@ -434,12 +541,12 @@ def set_position(conn: sqlite3.Connection, position_ms: int) -> bool:
     conn.execute(
         """
         INSERT INTO playback(id, position_ms, updated_at)
-        VALUES (1, ?, CURRENT_TIMESTAMP)
+        VALUES (1, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             position_ms = excluded.position_ms,
-            updated_at  = CURRENT_TIMESTAMP
+            updated_at  = excluded.updated_at
         """,
-        (position_ms,),
+        (position_ms, _local_now()),
     )
     conn.commit()
     return True
@@ -459,6 +566,22 @@ def latest_history_id(conn: sqlite3.Connection) -> int | None:
     row = conn.execute('SELECT MAX(id) FROM history').fetchone()
     return row[0] if row and row[0] is not None else None
 
+
+def latest_history(conn: sqlite3.Connection) -> tuple[int, int] | None:
+    """Return `(history id, track_id)` of the newest history row, or `None`."""
+
+    row = conn.execute(
+        'SELECT id, track_id FROM history ORDER BY id DESC LIMIT 1'
+    ).fetchone()
+    return (row[0], row[1]) if row else None
+
+
+def current_position(conn: sqlite3.Connection) -> int:
+    """Return the last stored playback position in ms (0 when unset)."""
+
+    row = conn.execute('SELECT position_ms FROM playback WHERE id = 1').fetchone()
+    return int(row[0]) if row is not None else 0
+
 # --- Async layer (aiosqlite) for the web server ------------------------------
 
 _conns: dict[str, aiosqlite.Connection] = {}
@@ -469,13 +592,13 @@ _T = TypeVar('_T')
 _CURRENT_SQL = """
 SELECT a.title AS Artist, al.title AS Album, t.title AS Title,
        al.id AS AlbumId, al.cover_url AS CoverUrl, t.id AS TrackId,
-       COALESCE(f.count, 0) AS FavouriteCount, t.duration AS Duration,
-       al.review AS Review, t.mbid AS Mbid
+       t.duration AS Duration,
+       al.review AS Review, t.mbid AS Mbid, COALESCE(fb.score, 0) AS Feedback
 FROM history h
 JOIN tracks t ON t.id = h.track_id
 LEFT JOIN albums al ON al.id = t.album_id
 JOIN artists a ON a.id = t.artist_id
-LEFT JOIN favourites f ON f.track_id = t.id
+LEFT JOIN feedback fb ON fb.track_id = t.id
 WHERE h.auto_skipped = 0
 ORDER BY h.id DESC
 LIMIT 1
@@ -540,25 +663,30 @@ async def _afetchone(db_path: str, sql: str, params: tuple = ()) -> tuple | None
     return await _acall(db_path, op)
 
 
-async def alatest_change_token(db_path: str) -> tuple[int | None, int | None]:
-    """SSE change signal: `(latest history id, its track's duration)`.
+async def alatest_change_token(
+    db_path: str,
+) -> tuple[int | None, int | None, int]:
+    """SSE change signal: `(latest history id, its track's duration, feedback)`.
 
     The duration is part of the token so a track whose duration is refined
     after it was first recorded (without a new history row) still pushes an
-    update to the browser.
+    update to the browser. The feedback score is part of it for the same
+    reason: a love/hate vote writes no history row, but must re-render the
+    thumbs on every connected client.
     """
 
     row = await _afetchone(
         db_path,
         """
-        SELECT h.id, t.duration
+        SELECT h.id, t.duration, COALESCE(fb.score, 0)
         FROM history h
         JOIN tracks t ON t.id = h.track_id
+        LEFT JOIN feedback fb ON fb.track_id = t.id
         ORDER BY h.id DESC
         LIMIT 1
         """,
     )
-    return (row[0], row[1]) if row else (None, None)
+    return (row[0], row[1], row[2]) if row else (None, None, 0)
 
 
 async def aget_current(db_path: str) -> dict | None:
@@ -572,10 +700,10 @@ async def aget_current(db_path: str) -> dict | None:
         'AlbumId': track[3],
         'CoverUrl': track[4],
         'TrackId': track[5],
-        'FavouriteCount': track[6],
-        'Duration': track[7],
-        'Review': track[8],
-        'MBID': track[9],
+        'Duration': track[6],
+        'Review': track[7],
+        'MBID': track[8],
+        'Feedback': track[9],
     }
 
 
@@ -604,28 +732,16 @@ async def aget_position(db_path: str) -> tuple[int, str] | None:
     return (int(row[0]), str(row[1]))
 
 
-async def aincrement_skip(db_path: str, track_id: int) -> None:
+async def aset_feedback(db_path: str, track_id: int, score: int) -> None:
+    """Store the track's love/hate verdict (1, -1 or 0 to clear it)."""
+
     async def op(conn: aiosqlite.Connection) -> None:
         await conn.execute(
             """
-            INSERT INTO skips(track_id, count) VALUES (?, 1)
-            ON CONFLICT(track_id) DO UPDATE SET count = count + 1
+            INSERT INTO feedback(track_id, score) VALUES (?, ?)
+            ON CONFLICT(track_id) DO UPDATE SET score = excluded.score
             """,
-            (track_id,),
-        )
-        await conn.commit()
-
-    await _acall(db_path, op)
-
-
-async def aincrement_favourite(db_path: str, track_id: int) -> None:
-    async def op(conn: aiosqlite.Connection) -> None:
-        await conn.execute(
-            """
-            INSERT INTO favourites(track_id, count) VALUES (?, 1)
-            ON CONFLICT(track_id) DO UPDATE SET count = count + 1
-            """,
-            (track_id,),
+            (track_id, score),
         )
         await conn.commit()
 

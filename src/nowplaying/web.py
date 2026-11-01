@@ -250,6 +250,10 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
         _broadcaster_task.cancel()
         with suppress(asyncio.CancelledError):
             await _broadcaster_task
+    for feedback_task in tuple(_feedback_tasks):
+        feedback_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await feedback_task
     await listenbrainz.aclose()
     await db.aclose_all()
 
@@ -617,6 +621,7 @@ def _served_cover(track: dict) -> str | None:
 
 
 def _payload(track: dict) -> dict:
+    feedback = track.get('Feedback', 0)
     return {
         'Artist': track.get('Artist', 'Unknown Artist'),
         'Album': track.get('Album'),
@@ -626,9 +631,8 @@ def _payload(track: dict) -> dict:
         'TrackId': track.get('TrackId'),
         'MBID': track.get('MBID'),
         'Review': track.get('Review'),
-        'Loved': bool(
-            config.PREVIOUS_LOVE and track.get('FavouriteCount', 0) >= 3
-        ),
+        'Loved': feedback == 1,
+        'Hated': feedback == -1,
         'PlayerctlAvailable': PLAYERCTL_AVAILABLE,
     }
 
@@ -759,20 +763,6 @@ async def track_stream() -> StreamingResponse:
 async def player_control(action: str) -> dict:
     if action not in PLAYERCTL_ACTIONS:
         raise HTTPException(status_code=400, detail=f'Invalid action: {action}')
-    if action == 'next':
-        with suppress(Exception):
-            current = await db.aget_current(config.DB_PATH)
-            if current and current.get('TrackId'):
-                await db.aincrement_skip(config.DB_PATH, current['TrackId'])
-    elif action == 'previous':
-        with suppress(Exception):
-            current = await db.aget_current(config.DB_PATH)
-            if (
-                current
-                and current.get('TrackId')
-                and await _player_status() == 'Playing'
-            ):
-                await db.aincrement_favourite(config.DB_PATH, current['TrackId'])
     try:
         await run_playerctl(action)
     except FileNotFoundError:
@@ -780,6 +770,82 @@ async def player_control(action: str) -> dict:
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from None
     return {'status': 'success', 'action': action}
+
+
+# --- Love / hate feedback ---------------------------------------------------
+
+# The verdicts the dashboard's buttons send (1 = love, -1 = hate). Pressing the
+# active thumb again withdraws it (score 0), which is also a valid ListenBrainz
+# feedback value.
+FEEDBACK_SCORES = (listenbrainz.FEEDBACK_LOVE, listenbrainz.FEEDBACK_HATE)
+
+
+# Strong refs to in-flight submissions (a bare task can be garbage collected).
+_feedback_tasks: set[asyncio.Task[None]] = set()
+
+
+def _submit_feedback(mbid: str | None, score: int) -> None:
+    """Ship a vote to ListenBrainz in the background; never block the request.
+
+    `score` 0 withdraws a previous verdict, matching the dashboard's toggle.
+    """
+
+    if not config.LISTENBRAINZ_SUBMIT:
+        return
+    if not mbid:
+        # ListenBrainz feedback is keyed on the recording, so an unresolved
+        # track stays local-only (the thumbs still reflect the DB verdict).
+        logger.debug('[listenbrainz] no recording MBID; feedback stored locally only')
+        return
+
+    async def run() -> None:
+        try:
+            await listenbrainz.submit_feedback(mbid, score)
+        except listenbrainz.ListenBrainzError as exc:
+            logger.debug(f'[listenbrainz] feedback not submitted: {exc}')
+
+    task = asyncio.create_task(run())
+    _feedback_tasks.add(task)
+    task.add_done_callback(_feedback_tasks.discard)
+
+
+@app.post('/api/feedback/{score}')
+async def feedback(score: int) -> dict:
+    """Love (`1`) or hate (`-1`) the current track; the active thumb toggles off.
+
+    The verdict is one row in `feedback` (1 = loved, -1 = hated, 0 = withdrawn);
+    that is what the thumbs render from and what the monitor's auto-skip reads.
+    A love replaces a hate and vice versa; a hate on a fresh vote also skips to
+    the next track. Pressing the active thumb again withdraws the verdict: the
+    score is cleared, nothing is skipped, and ListenBrainz gets score 0.
+    """
+
+    if score not in FEEDBACK_SCORES:
+        raise HTTPException(status_code=400, detail=f'Invalid feedback: {score}')
+    current = await db.aget_current(config.DB_PATH)
+    if current is None or not current.get('TrackId'):
+        raise HTTPException(status_code=404, detail='No track playing') from None
+    track_id = current['TrackId']
+    withdrawing = current.get('Feedback') == score
+    try:
+        await db.aset_feedback(config.DB_PATH, track_id, 0 if withdrawing else score)
+    except (OSError, sqlite3.Error) as exc:
+        logger.debug(f'[feedback] could not store the verdict: {exc}')
+
+    if score == listenbrainz.FEEDBACK_HATE and not withdrawing:
+        try:
+            await run_playerctl('next')
+        except (FileNotFoundError, RuntimeError) as exc:
+            logger.debug(f'[feedback] skip failed: {exc}')
+
+    _submit_feedback(current.get('MBID'), 0 if withdrawing else score)
+    # Re-read so the response is the stored state, not the optimistic guess.
+    try:
+        updated = await db.aget_current(config.DB_PATH)
+    except (OSError, sqlite3.Error) as exc:
+        logger.debug(f'[feedback] could not re-read the track: {exc}')
+        updated = None
+    return _payload(updated or current)
 
 
 @app.get('/api/player/status')
@@ -858,14 +924,14 @@ async def _reached_track_end(track: dict | None) -> bool:
 async def _wait_for_track_end() -> None:
     """Block until the current track ends (a different track starts)."""
     try:
-        baseline_history, _ = await db.alatest_change_token(config.DB_PATH)
+        baseline_history, _, _ = await db.alatest_change_token(config.DB_PATH)
     except (OSError, sqlite3.Error):
         baseline_history = None
     baseline_track = await _current_track_id()
     while True:
         await asyncio.sleep(_SLEEP_POLL_SECONDS)
         try:
-            history, _ = await db.alatest_change_token(config.DB_PATH)
+            history, _, _ = await db.alatest_change_token(config.DB_PATH)
         except (OSError, sqlite3.Error):
             continue
         if history is not None and history != baseline_history:
@@ -930,6 +996,127 @@ async def sleep(mode: str) -> dict[str, object]:
     if mode not in SLEEP_MODES and mode != 'off':
         raise HTTPException(status_code=400, detail=f'Invalid sleep mode: {mode}')
     return await _arm_sleep(mode)
+
+
+# --- Quick settings ----------------------------------------------------------
+
+# Behaviour toggles + UI theme the dashboard manages. The `.env` file is the
+# ground truth for them (see `_persist_env`), so anything written here survives a
+# restart and is also applied to the running config right away.
+SETTING_FLAGS = ('AUTOSKIP', 'LISTENBRAINZ_SUBMIT')
+SETTING_KEYS = frozenset({*SETTING_FLAGS, 'THEME'})
+
+ENV_PATH = ROOT_DIR / '.env'
+
+
+def _valid_theme(name: str) -> bool:
+    """Whether `name` is an adaptive theme or a static CSS file in web/themes."""
+    stripped = name.strip().removesuffix('.css')
+    if stripped in {n.removesuffix('.css') for n in ADAPTIVE_THEMES}:
+        return True
+    return (
+        re.fullmatch(r'[a-z0-9-]+', stripped) is not None
+        and (THEMES_DIR / f'{stripped}.css').is_file()
+    )
+
+
+def _list_theme_names() -> list[str]:
+    """Names of the themes available in web/themes (file stem; e.g. `tokio-night`)."""
+    try:
+        return sorted(
+            path.stem
+            for path in THEMES_DIR.iterdir()
+            if path.is_file() and path.suffix == '.css'
+        )
+    except OSError:
+        return []
+
+
+def _persist_env(pairs: list[tuple[str, str]]) -> None:
+    """Write `KEY=value` pairs into the project-root `.env` - the ground truth.
+
+    Existing assignments are replaced in place, new keys are appended; comments
+    and unrelated keys are left untouched.
+    """
+    text = ''
+    if ENV_PATH.exists():
+        text = ENV_PATH.read_text(encoding='utf-8')
+    for key, value in pairs:
+        pattern = re.compile(rf'(?m)^(\s*(?:export\s+)?){re.escape(key)}=.*$')
+        if pattern.search(text):
+            text = pattern.sub(fr'\g<1>{key}={value}', text, count=1)
+        elif text.strip():
+            text = f'{text.rstrip()}\n{key}={value}\n'
+        else:
+            text = f'{key}={value}\n'
+    ENV_PATH.parent.mkdir(parents=True, exist_ok=True)
+    ENV_PATH.write_text(text, encoding='utf-8')
+
+
+def _settings_payload() -> dict[str, object]:
+    """Current quick settings; `LISTENBRAINZ_TOKEN` is read-only (token present?).
+
+    A token is required for submission, so the dashboard disables that switch
+    while it is absent; the token value itself is never sent to the browser.
+    """
+    return {
+        'AUTOSKIP': config.AUTOSKIP,
+        'LISTENBRAINZ_SUBMIT': config.LISTENBRAINZ_SUBMIT,
+        'THEME': THEME,
+        'LISTENBRAINZ_TOKEN': bool(config.LISTENBRAINZ_TOKEN),
+    }
+
+
+@app.get('/api/settings')
+async def get_settings() -> dict[str, object]:
+    """Quick settings snapshot (`Settings`) plus the available themes (`Themes`)."""
+
+    themes = await asyncio.to_thread(_list_theme_names)
+    return {'Settings': _settings_payload(), 'Themes': themes}
+
+
+@app.post('/api/settings')
+async def update_settings(payload: dict[str, object]) -> dict[str, object]:
+    """Update quick settings (`AUTOSKIP` / `LISTENBRAINZ_SUBMIT` / `THEME`).
+
+    Every change is persisted to the project-root `.env` (the ground truth) and
+    applied to the running config immediately, so the flags take effect without a
+    restart wherever the process reads them at call time.
+    """
+
+    global THEME
+
+    updates: list[tuple[str, str]] = []
+    for key, value in payload.items():
+        name = str(key)
+        if name not in SETTING_KEYS:
+            raise HTTPException(status_code=400, detail=f'Unknown setting: {name}') from None
+        if name == 'THEME':
+            if not isinstance(value, str):
+                raise HTTPException(status_code=400, detail='THEME must be a string') from None
+            theme_name = value.strip().removesuffix('.css')
+            if not _valid_theme(theme_name):
+                raise HTTPException(status_code=400, detail=f'Unknown theme: {value}') from None
+            if theme_name != THEME:
+                THEME = theme_name
+                config.THEME = theme_name
+                updates.append(('THEME', theme_name))
+        elif name in SETTING_FLAGS:
+            if not isinstance(value, bool):
+                raise HTTPException(
+                    status_code=400, detail=f'{name} must be a boolean'
+                ) from None
+            if value != getattr(config, name):
+                setattr(config, name, value)
+                updates.append((name, '1' if value else '0'))
+
+    if updates:
+        await asyncio.to_thread(_persist_env, updates)
+
+    return {
+        'Settings': _settings_payload(),
+        'Themes': await asyncio.to_thread(_list_theme_names),
+    }
 
 
 def main() -> None:

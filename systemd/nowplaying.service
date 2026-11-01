@@ -2,14 +2,14 @@
 # Replace {$PROJECTS} with parent location of nowplaying code
 
 [Unit]
-Description=Now Playing Track Monitor (any media app)
+Description=Now Playing
 After=bluetooth.service
 
 [Service]
 Type=simple
 User=pi
 WorkingDirectory=/{$PROJECTS}/nowplaying
-ExecStart=/{$HOME}/.local/bin/uv run nowplaying-monitor
+ExecStart=/{$HOME}/.local/bin/uv run nowplaying
 Restart=always
 RestartSec=3
 Environment=PYTHONUNBUFFERED=1

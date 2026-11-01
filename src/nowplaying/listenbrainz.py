@@ -49,6 +49,11 @@ LABS_MIN_INTERVAL = 0.3  # the Labs dataset hoster is not rate limited
 METADATA_BATCH = 50  # recordings per POST /1/metadata/recording call
 MODES = ('easy', 'medium', 'hard')
 
+# Listen submission / feedback (needs a user token, see config).
+SUBMISSION_CLIENT = 'nowplaying'
+SUBMISSION_CLIENT_VERSION = '0.1.0'
+FEEDBACK_LOVE, FEEDBACK_HATE = 1, -1
+
 # Precomputed similarity sets from ListenBrainz Labs, as `(dataset, algorithm)`
 # in the order they are tried (see `similar_recordings`).
 SIMILAR_SOURCES = (
@@ -209,6 +214,95 @@ def _clean_mbid(value: str) -> str:
     if not _MBID_RE.match(mbid):
         raise ListenBrainzError(f'"{value}" is not a MusicBrainz MBID (uuid)')
     return mbid
+
+
+def _auth() -> dict[str, str]:
+    """Authorization header for a user-token call.
+
+    Raises when submission is not configured, so a caller that forgets the
+    token check can never send an unauthenticated write.
+    """
+
+    if not config.LISTENBRAINZ_SUBMIT:
+        raise ListenBrainzError('ListenBrainz submission is not configured')
+    return {'Authorization': f'Token {config.LISTENBRAINZ_TOKEN}'}
+
+
+async def submit_listen(
+    *,
+    artist: str,
+    title: str,
+    album: str | None = None,
+    duration_ms: int | None = None,
+    recording_mbid: str | None = None,
+    release_group_mbid: str | None = None,
+    listened_at: int | None = None,
+) -> None:
+    """Submit one finished listen (`POST /1/submit-listens`, type `single`).
+
+    `listened_at` is the playback *start* time (ListenBrainz rejects future and
+    pre-2002 timestamps), so callers derive it from the track's position rather
+    than passing "now". Optional metadata is omitted when unknown instead of
+    being sent empty.
+    """
+
+    metadata: dict[str, Any] = {'artist_name': artist, 'track_name': title}
+    if album:
+        metadata['release_name'] = album
+    additional: dict[str, Any] = {
+        'submission_client': SUBMISSION_CLIENT,
+        'submission_client_version': SUBMISSION_CLIENT_VERSION,
+    }
+    if duration_ms:
+        additional['duration_ms'] = int(duration_ms)
+    if recording_mbid:
+        additional['recording_mbid'] = recording_mbid
+    if release_group_mbid:
+        additional['release_group_mbid'] = release_group_mbid
+    metadata['additional_info'] = additional
+
+    await _request(
+        'POST',
+        '/1/submit-listens',
+        headers=_auth(),
+        json={
+            'listen_type': 'single',
+            'payload': [
+                {
+                    'listened_at': listened_at or int(time.time()),
+                    'track_metadata': metadata,
+                }
+            ],
+        },
+    )
+
+
+async def submit_feedback(recording_mbid: str, score: int) -> None:
+    """Submit love/hate feedback (`POST /1/feedback/recording-feedback`).
+
+    `score` is 1 (love), -1 (hate) or 0 (withdraw feedback). Called by the web
+    server when the user presses a thumb on the dashboard (see
+    `POST /api/feedback/{score}`); never automatic.
+    """
+
+    await _request(
+        'POST',
+        '/1/feedback/recording-feedback',
+        headers=_auth(),
+        json={'recording_mbid': _clean_mbid(recording_mbid), 'score': score},
+    )
+
+
+async def validate_token() -> str | None:
+    """Return the token's ListenBrainz user name, or None when it is invalid."""
+
+    if not config.LISTENBRAINZ_SUBMIT:
+        return None
+    data = await _request('GET', '/1/validate-token', headers=_auth())
+    if not isinstance(data, dict) or not data.get('valid'):
+        return None
+    user = data.get('user_name')
+    return str(user) if user else None
 
 
 async def recording_metadata(recording_mbids: list[str]) -> dict[str, Any]:

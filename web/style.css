@@ -70,6 +70,53 @@ span.centered {
     justify-content: space-between;
 }
 
+.header-title {
+    display: flex;
+    align-items: center;
+    gap: 0.2rem;
+    min-width: 0;
+}
+
+.settings-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: none;
+    border: none;
+    color: var(--foreground-color);
+    padding: 0.35rem;
+    cursor: pointer;
+    border-radius: 6px;
+    flex-shrink: 0;
+    transition: transform 0.1s ease, color 0.1s ease;
+}
+
+.settings-btn:active {
+    transform: scale(0.85);
+}
+
+@media (hover: hover) {
+    .settings-btn:hover {
+        color: var(--accent-color);
+    }
+}
+
+.settings-btn:focus-visible {
+    color: var(--accent-color);
+    outline: none;
+}
+
+.settings-btn .settings-icon {
+    display: block;
+    width: 1.4rem;
+    height: 1.4rem;
+    fill: none;
+    /* Lighter than the other icons' 16-unit stroke: the gear has many short
+       arcs, so the full weight read as too bold. */
+    stroke: currentColor;
+    stroke-width: 10;
+}
+
 .main {
     display: contents;
 }
@@ -88,6 +135,7 @@ span.centered {
 }
 
 .cover {
+    position: relative;
     margin-top: 1.5rem;
     display: flex;
     justify-content: center;
@@ -109,6 +157,63 @@ span.centered {
     max-height: 60vh;
     height: auto;
     width: auto;
+}
+
+/* Love / hate pill overlaid on the album art (lower right). The local DB's
+   verdict fills the matching thumb; the icons are the only "loved" indicator. */
+
+.feedback {
+    position: absolute;
+    right: 0.6rem;
+    bottom: 0.6rem;
+    display: flex;
+    gap: 0.5rem;
+    padding: 0.15rem;
+    border: 1px solid var(--shadow-color);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--background-color), transparent 20%);
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
+    backdrop-filter: blur(6px);
+}
+
+.feedback[hidden] {
+    display: none;
+}
+
+.feedback-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.35rem;
+    border: none;
+    border-radius: 999px;
+    background: none;
+    color: var(--foreground-color);
+    cursor: pointer;
+    transition: transform 0.1s ease, color 0.1s ease, background 0.1s ease;
+}
+
+.feedback-btn:active {
+    transform: scale(0.85);
+}
+
+@media (hover: hover) {
+    .feedback-btn:hover {
+        color: var(--accent-color);
+        background: color-mix(in srgb, var(--background-color), var(--foreground-color) 12%);
+    }
+}
+
+.feedback-btn.active {
+    color: var(--accent-color);
+}
+
+.feedback-icon {
+    display: block;
+    width: 1.4rem;
+    height: 1.4rem;
+    fill: currentColor;
+    stroke: none;
 }
 
 .spacer {
@@ -199,15 +304,6 @@ span.centered {
 
 .track-icon:hover {
     stroke: var(--foreground-color);
-}
-
-.track-icon.heart {
-    stroke: none;
-    fill: var(--accent-color);
-}
-
-.track-icon.heart:hover {
-    fill: #CC241D;
 }
 
 .track-icon.review {
@@ -347,7 +443,7 @@ span.centered {
     background: none;
     border: none;
     color: var(--foreground-color);
-    padding: 0.35rem 0.5rem;
+    padding: 0.35rem 0;
     font-family: inherit;
     font-size: 1rem;
     line-height: 1;
@@ -427,9 +523,10 @@ span.centered {
     color: var(--accent-color);
 }
 
-/* Review Popup */
+/* Review / Settings popup (shared chrome) */
 
-.review-popup {
+.review-popup,
+.settings-popup {
     position: fixed;
     inset: 0;
     z-index: 50;
@@ -440,11 +537,13 @@ span.centered {
     padding: 1rem;
 }
 
-.review-popup[hidden] {
+.review-popup[hidden],
+.settings-popup[hidden] {
     display: none;
 }
 
-.review-popup-card {
+.review-popup-card,
+.settings-popup-card {
     background: var(--background-color);
     border: 1px solid var(--shadow-color);
     border-radius: 12px;
@@ -464,7 +563,8 @@ span.centered {
     width: 860px;
 }
 
-.review-popup-header {
+.review-popup-header,
+.settings-popup-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -473,7 +573,8 @@ span.centered {
     border-bottom: 1px solid var(--shadow-color);
 }
 
-.review-popup-title {
+.review-popup-title,
+.settings-popup-title {
     font-weight: 700;
     color: var(--accent-color);
     overflow: hidden;
@@ -481,7 +582,8 @@ span.centered {
     white-space: nowrap;
 }
 
-.review-close {
+.review-close,
+.settings-close {
     background: none;
     border: none;
     color: var(--foreground-color);
@@ -494,12 +596,14 @@ span.centered {
 }
 
 @media (hover: hover) {
-    .review-close:hover {
+    .review-close:hover,
+    .settings-close:hover {
         color: var(--accent-color);
     }
 }
 
-.review-popup-body {
+.review-popup-body,
+.settings-popup-body {
     padding: 1.25rem;
     overflow-y: auto;
     font-size: 1rem;
@@ -553,6 +657,132 @@ span.centered {
     color: color-mix(in srgb, var(--foreground-color), var(--background-color) 35%);
 }
 
+/* Quick settings modal: same popup chrome, with behaviour toggles + theme. */
+
+.settings-popup-card {
+    width: 420px;
+}
+
+.settings-popup-body {
+    display: flex;
+    flex-direction: column;
+    gap: 1.1rem;
+}
+
+.settings-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+}
+
+.settings-row-title {
+    font-weight: 700;
+    color: var(--accent-color);
+}
+
+.settings-row-desc {
+    font-size: 0.8rem;
+    color: color-mix(in srgb, var(--foreground-color), var(--background-color) 45%);
+    margin-top: 0.2rem;
+}
+
+/* Native switch: a hidden checkbox drives the :checked state, the `.slider`
+   span is the visual track/thumb (no JS needed for the boolean state). */
+
+.switch {
+    position: relative;
+    display: inline-block;
+    flex-shrink: 0;
+    width: 60px;
+    height: 34px;
+}
+
+.switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.switch .slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: var(--background-color);
+    border: 1px solid var(--shadow-color);
+    border-radius: 34px;
+    transition: 0.4s;
+}
+
+.switch .slider::before {
+    position: absolute;
+    content: '';
+    height: 26px;
+    width: 26px;
+    left: 3px;
+    bottom: 3px;
+    background-color: var(--foreground-color);
+    border-radius: 50%;
+    transition: 0.4s;
+}
+
+.switch input:checked + .slider {
+    background-color: var(--accent-color);
+    border-color: var(--accent-color);
+}
+
+.switch input:checked + .slider::before {
+    transform: translateX(26px);
+}
+
+.switch input:focus-visible + .slider {
+    box-shadow: 0 0 4px var(--accent-color);
+}
+
+/* A disabled switch (e.g. ListenBrainz submission without a token) reads as
+   unavailable: dim the track, the knob and the row's text. */
+
+.switch input:disabled + .slider {
+    cursor: not-allowed;
+    opacity: 0.45;
+}
+
+.settings-row.disabled .settings-row-title,
+.settings-row.disabled .settings-row-desc {
+    opacity: 0.5;
+}
+
+.settings-theme {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+}
+
+.settings-theme select {
+    background: var(--background-color);
+    color: var(--foreground-color);
+    border: 1px solid var(--shadow-color);
+    width: 100%;
+    box-sizing: border-box;
+    border-radius: 8px;
+    padding: 0.5rem;
+    font-family: inherit;
+    font-size: 0.95rem;
+    appearance: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    cursor: pointer;
+}
+
+.settings-theme select:focus-visible {
+    outline: 2px solid var(--accent-color);
+    outline-offset: 1px;
+}
+
+
 .similar-table {
     width: 100%;
     border-collapse: collapse;
@@ -604,16 +834,16 @@ span.centered {
     white-space: nowrap;
 }
 
-.similar-table td:nth-child(3) {
+.similar-table td:nth-child(2) {
     white-space: nowrap;
 }
 
-.similar-table td:nth-child(4) {
+.similar-table td:nth-child(3) {
     min-width: 11rem;
     overflow-wrap: anywhere;
 }
 
-.similar-table td:nth-child(5) {
+.similar-table td:nth-child(4) {
     color: color-mix(in srgb, var(--foreground-color), var(--background-color) 25%);
     overflow-wrap: anywhere;
 }
@@ -639,21 +869,21 @@ span.centered {
     object-fit: cover;
 }
 
-.similar-table td:nth-child(2) {
+.similar-table td:nth-child(1) {
     width: 1%;
     padding-right: 0;
 }
 
-/* Similar artists: no cover column, so the artist sits in column 2 and the
+/* Similar artists: no cover column, so the artist sits in column 1 and the
    sample track takes the width the album column would use. */
 
-.similar-table.artists td:nth-child(2) {
+.similar-table.artists td:nth-child(1) {
     width: auto;
     padding-right: 0.75rem;
     white-space: nowrap;
 }
 
-.similar-table.artists td:nth-child(3) {
+.similar-table.artists td:nth-child(2) {
     min-width: 11rem;
     white-space: normal;
     color: color-mix(in srgb, var(--foreground-color), var(--background-color) 25%);
@@ -661,8 +891,8 @@ span.centered {
 }
 
 @media (max-width: 600px) {
-    .similar-table th:nth-child(5),
-    .similar-table td:nth-child(5) {
+    .similar-table th:nth-child(4),
+    .similar-table td:nth-child(4) {
         display: none;
     }
 
@@ -672,15 +902,15 @@ span.centered {
         padding: 0.35rem 0.5rem;
     }
 
-    .similar-table td:nth-child(3) {
+    .similar-table td:nth-child(2) {
         white-space: normal;
     }
 
-    .similar-table td:nth-child(4) {
+    .similar-table td:nth-child(3) {
         min-width: 0;
     }
 
-    .similar-table.artists td:nth-child(2) {
+    .similar-table.artists td:nth-child(1) {
         white-space: normal;
     }
 }
@@ -694,6 +924,10 @@ span.centered {
     }
 
     .header-container {
+        display: none;
+    }
+
+    .feedback {
         display: none;
     }
 

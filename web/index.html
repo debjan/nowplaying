@@ -71,7 +71,12 @@
     <audio id="session-audio" loop preload="auto" hidden></audio>
     <div class="card">
         <div class="header-container">
-            <h1>Now Playing</h1>
+            <div class="header-title">
+                <h1>Now Playing</h1>
+                <button type="button" id="settings-btn" class="settings-btn" aria-haspopup="dialog" aria-expanded="false" aria-label="Quick Settings" title="Quick Settings">
+                    <svg class="settings-icon" aria-hidden="true"><use href="#icon-settings"/></svg>
+                </button>
+            </div>
             <div class="picker">
                 <button type="button" id="sleep-btn" class="picker-btn" aria-haspopup="menu" aria-expanded="false" title="Sleep timer">
                     <svg class="picker-icon"><use href="#icon-sleep"/></svg>
@@ -89,6 +94,14 @@
         <div class="main">
             <div class="cover">
                 <img id="art" class="art" alt="Album art" src="cover.svg">
+                <div id="feedback" class="feedback" hidden>
+                    <button type="button" class="feedback-btn" data-score="1" title="Love this track" aria-label="Love this track" aria-pressed="false">
+                        <svg class="feedback-icon" aria-hidden="true"><use href="#icon-thumbs-up"/></svg>
+                    </button>
+                    <button type="button" class="feedback-btn" data-score="-1" title="Hate this track" aria-label="Hate this track" aria-pressed="false">
+                        <svg class="feedback-icon" aria-hidden="true"><use href="#icon-thumbs-down"/></svg>
+                    </button>
+                </div>
             </div>
             <div class="main-right">
                 <div class="track">
@@ -142,7 +155,8 @@
                 <line x1="208" y1="72" x2="80" y2="104" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/>
                 <polyline points="80 196 80 56 208 24 208 164" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/>
             </symbol>
-            <symbol id="icon-sleep" viewBox="0 0 256 256"><rect width="256" height="256" fill="none" stroke="none"/>
+            <symbol id="icon-sleep" viewBox="0 0 256 256">
+                <rect width="256" height="256" fill="none" stroke="none"/>
                 <path d="M224,136c-4.07,49.28-45.67,88-96,88a96,96,0,0,1-96-96c0-50.33,38.72-91.93,88-96"
                     fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"
                     stroke-width="16" />
@@ -152,14 +166,53 @@
                 <circle cx="196" cy="60" r="12" fill="currentColor" stroke="none" />
                 <circle cx="220" cy="96" r="12" fill="currentColor" stroke="none" />
             </symbol>
-            <symbol id="icon-love" width="24" height="24" viewBox="0 0 256 256"><rect width="256" height="256" fill="none" stroke="none"/>
-                <path d="M240,102c0,70-103.79,126.66-108.21,129a8,8,0,0,1-7.58,0C119.79,228.66,16,172,16,102A62.07,62.07,0,0,1,78,40c20.65,0,38.73,8.88,50,23.89C139.27,48.88,157.35,40,178,40A62.07,62.07,0,0,1,240,102Z"/>
-            </symbol>
+            <symbol id="icon-thumbs-up" width="24" height="24" viewBox="0 0 256 256"><path d="M234,80.12A24,24,0,0,0,216,72H160V56a40,40,0,0,0-40-40,8,8,0,0,0-7.16,4.42L75.06,96H32a16,16,0,0,0-16,16v88a16,16,0,0,0,16,16H204a24,24,0,0,0,23.82-21l12-96A24,24,0,0,0,234,80.12ZM32,112H72v88H32ZM223.94,97l-12,96a8,8,0,0,1-7.94,7H88V105.89l36.71-73.43A24,24,0,0,1,144,56V80a8,8,0,0,0,8,8h64a8,8,0,0,1,7.94,9Z"></path></symbol>
+            <symbol id="icon-thumbs-up-filled" width="24" height="24" viewBox="0 0 256 256"><path d="M234,80.12A24,24,0,0,0,216,72H160V56a40,40,0,0,0-40-40,8,8,0,0,0-7.16,4.42L75.06,96H32a16,16,0,0,0-16,16v88a16,16,0,0,0,16,16H204a24,24,0,0,0,23.82-21l12-96A24,24,0,0,0,234,80.12ZM32,112H72v88H32Z"></path></symbol>
+            <symbol id="icon-thumbs-down" width="24" height="24" viewBox="0 0 256 256"><path d="M239.82,157l-12-96A24,24,0,0,0,204,40H32A16,16,0,0,0,16,56v88a16,16,0,0,0,16,16H75.06l37.78,75.58A8,8,0,0,0,120,240a40,40,0,0,0,40-40V184h56a24,24,0,0,0,23.82-27ZM72,144H32V56H72Zm150,21.29a7.88,7.88,0,0,1-6,2.71H152a8,8,0,0,0-8,8v24a24,24,0,0,1-19.29,23.54L88,150.11V56H204a8,8,0,0,1,7.94,7l12,96A7.87,7.87,0,0,1,222,165.29Z"></path></symbol>
+            <symbol id="icon-thumbs-down-filled" width="24" height="24" viewBox="0 0 256 256"><path d="M239.82,157l-12-96A24,24,0,0,0,204,40H32A16,16,0,0,0,16,56v88a16,16,0,0,0,16,16H75.06l37.78,75.58A8,8,0,0,0,120,240a40,40,0,0,0,40-40V184h56a24,24,0,0,0,23.82-27ZM72,144H32V56H72Z"></path></symbol>
             <symbol id="icon-listenbrainz" width="24" height="24" viewBox="0 0 27 30">
                 <polygon fill="#353070" stroke="none" points="13 1 1 8 1 22 13 29 13 1"/>
                 <polygon fill="#eb743b" stroke="none" points="14 1 26 8 26 22 14 29 14 1"/>
             </symbol>
+            <symbol id="icon-settings" width="24" height="24" viewBox="0 0 256 256">
+                <path d="M40,88H73a32,32,0,0,0,62,0h81a8,8,0,0,0,0-16H135a32,32,0,0,0-62,0H40a8,8,0,0,0,0,16Zm64-24A16,16,0,1,1,88,80,16,16,0,0,1,104,64ZM216,168H199a32,32,0,0,0-62,0H40a8,8,0,0,0,0,16h97a32,32,0,0,0,62,0h17a8,8,0,0,0,0-16Zm-48,24a16,16,0,1,1,16-16A16,16,0,0,1,168,192Z"
+                    fill="currentColor" stroke="none" />
+            </symbol>
         </svg>
+    </div>
+    <div id="settings-popup" class="settings-popup" hidden>
+        <div class="settings-popup-card" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+            <div class="settings-popup-header">
+                <span id="settings-title" class="settings-popup-title">Settings</span>
+                <button type="button" id="settings-close" class="settings-close" aria-label="Close">✕</button>
+            </div>
+            <div class="settings-popup-body">
+                <div class="settings-row">
+                    <div>
+                        <div class="settings-row-title">ListenBrainz submission</div>
+                        <div class="settings-row-desc">Send listens to ListenBrainz once a track has played.</div>
+                    </div>
+                    <label class="switch">
+                        <input type="checkbox" role="switch" aria-label="ListenBrainz submission" data-setting="LISTENBRAINZ_SUBMIT">
+                        <span class="slider"></span>
+                    </label>
+                </div>
+                <div class="settings-row">
+                    <div>
+                        <div class="settings-row-title">Auto-skip</div>
+                        <div class="settings-row-desc">Skip hated tracks (thumbs down) automatically.</div>
+                    </div>
+                    <label class="switch">
+                        <input type="checkbox" role="switch" aria-label="Auto-skip" data-setting="AUTOSKIP">
+                        <span class="slider"></span>
+                    </label>
+                </div>
+                <div class="settings-theme">
+                    <div class="settings-row-title">Theme</div>
+                    <select id="settings-theme" class="settings-theme-select"></select>
+                </div>
+            </div>
+        </div>
     </div>
     <div id="review-popup" class="review-popup" hidden>
         <div class="review-popup-card" role="dialog" aria-modal="true" aria-labelledby="review-title">
@@ -193,44 +246,6 @@
                 progress.hidden = true;
             }
 
-            const themeMeta = document.querySelector('meta[name="nowplaying-theme"]');
-            const configuredTheme = (themeMeta && themeMeta.content) || '';
-            const ADAPTIVE_THEMES = new Set(['adaptive-dark', 'adaptive-light']);
-            const osLight = window.matchMedia('(prefers-color-scheme: light)');
-            let currentTheme = configuredTheme
-                || (osLight.matches ? 'adaptive-light' : 'adaptive-dark');
-            let lastArtVersion = null;
-
-            function applyTheme(name, version) {
-                let link = document.getElementById('theme-override');
-                if (!link) {
-                    link = document.createElement('link');
-                    link.rel = 'stylesheet';
-                    link.id = 'theme-override';
-                    document.head.appendChild(link);
-                }
-                const href = ADAPTIVE_THEMES.has(name) && version
-                    ? `themes/${name}.css?v=${version}`
-                    : `themes/${name}.css`;
-                const url = new URL(href, location.href);
-                // Re-sync the browser chrome color once the new sheet applies.
-                link.onload = () => syncThemeColor();
-                if (link.href !== url.href) {
-                    link.href = href;
-                } else {
-                    syncThemeColor();
-                }
-                currentTheme = name;
-            }
-
-            // Follow OS light/dark only when no fixed theme is configured.
-            if (!configuredTheme) {
-                osLight.addEventListener('change', (e) => {
-                    const name = e.matches ? 'adaptive-light' : 'adaptive-dark';
-                    applyTheme(name, lastArtVersion);
-                });
-            }
-
             function add_span(el) {
                 const span = document.createElement('span')
                 span.className = 'centered';
@@ -259,6 +274,7 @@
                         add_span(trackEl);
                     }
                     artEl.src = 'cover.svg';
+                    renderFeedback(null);
                     clearMediaSession();
                     return;
                 }
@@ -296,6 +312,7 @@
                 }
                 lastTrackData = data;
                 durationMs = Number(data.Duration) || 0;
+                renderFeedback(data);
                 updateMediaSession(data);
                 const art = data['Album Art'] || 'cover.svg';
                 if (!artEl.src.endsWith(art)) {
@@ -313,7 +330,7 @@
                 // SSE re-emits the current track on every reconnect.
                 const renderKey = JSON.stringify([
                     data.Artist, data.Album, data.Title,
-                    data.Loved, data.Review, data.MBID,
+                    data.Loved, data.Hated, data.Review, data.MBID,
                 ]);
                 if (renderKey === lastRenderKey) {
                     playerctlAvailable = data.PlayerctlAvailable;
@@ -346,21 +363,17 @@
                         }]
                         : []),
                     {
-                        icon: similarTrack
-                            ? 'icon-listenbrainz'
-                            : (data.Loved ? 'icon-love' : 'icon-note'),
+                        icon: similarTrack ? 'icon-listenbrainz' : 'icon-note',
                         text: data.Title,
-                        loved: data.Loved && !similarTrack,
                         popup: similarTrack ? 'recordings' : null,
                     },
                 ];
                 trackEl.innerHTML = '';
-                rows.forEach(({ icon, text, loved, review, popup }) => {
+                rows.forEach(({ icon, text, review, popup }) => {
                     const row = document.createElement('div');
                     row.className = 'track-row';
                     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
                     svg.classList.add('track-icon');
-                    if (loved) svg.classList.add('heart');
                     if (review) svg.classList.add('review');
                     const use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
                     use.setAttribute('href', `#${icon}`);
@@ -392,6 +405,7 @@
                     }
                     trackEl.appendChild(row);
                 });
+                renderFeedback(data);
             }
 
             // One ListenBrainz probe per track change (not a poll): `limit=1` is
@@ -474,6 +488,47 @@
                 }
             };
         });
+
+        // --- Theme ------------------------------------------------------------
+        // Top level: the SSE handler (above, inside DOMContentLoaded) and the
+        // settings modal (below) share the same theme state and switcher.
+        const themeMeta = document.querySelector('meta[name="nowplaying-theme"]');
+        const configuredTheme = (themeMeta && themeMeta.content) || '';
+        const ADAPTIVE_THEMES = new Set(['adaptive-dark', 'adaptive-light']);
+        const osLight = window.matchMedia('(prefers-color-scheme: light)');
+        let currentTheme = configuredTheme
+            || (osLight.matches ? 'adaptive-light' : 'adaptive-dark');
+        let lastArtVersion = null;
+
+        function applyTheme(name, version) {
+            let link = document.getElementById('theme-override');
+            if (!link) {
+                link = document.createElement('link');
+                link.rel = 'stylesheet';
+                link.id = 'theme-override';
+                document.head.appendChild(link);
+            }
+            const href = ADAPTIVE_THEMES.has(name) && version
+                ? `themes/${name}.css?v=${version}`
+                : `themes/${name}.css`;
+            const url = new URL(href, location.href);
+            // Re-sync the browser chrome color once the new sheet applies.
+            link.onload = () => syncThemeColor();
+            if (link.href !== url.href) {
+                link.href = href;
+            } else {
+                syncThemeColor();
+            }
+            currentTheme = name;
+        }
+
+        // Follow OS light/dark only when no fixed theme is configured.
+        if (!configuredTheme) {
+            osLight.addEventListener('change', (e) => {
+                const name = e.matches ? 'adaptive-light' : 'adaptive-dark';
+                applyTheme(name, lastArtVersion);
+            });
+        }
 
         const playBtn = document.querySelector('.btn-play');
 
@@ -574,6 +629,82 @@
             btn.addEventListener('click', () => sendControl(btn.dataset.action));
         });
 
+        // --- Love / hate ------------------------------------------------------
+        // Two thumbs over the album art. A vote is stored in the local `feedback`
+        // table and, with a ListenBrainz token, submitted as love/hate feedback.
+        // The SSE change token includes the score, so every open client re-renders
+        // the filled variant (the local DB is the only source of truth).
+        const feedbackEl = document.getElementById('feedback');
+        const thumbUp = feedbackEl.querySelector('.feedback-btn[data-score="1"]');
+        const thumbDown = feedbackEl.querySelector('.feedback-btn[data-score="-1"]');
+
+        function renderThumb(btn, pressed, kind) {
+            const icon = pressed ? `icon-thumbs-${kind}-filled` : `icon-thumbs-${kind}`;
+            btn.querySelector('use').setAttribute('href', `#${icon}`);
+            btn.classList.toggle('active', pressed);
+            btn.setAttribute('aria-pressed', String(pressed));
+            // The label describes what a click does next (rate vs. withdraw).
+            const label = kind === 'up'
+                ? (pressed ? 'Remove love' : 'Love this track')
+                : (pressed ? 'Remove hate' : 'Hate this track');
+            btn.title = label;
+            btn.setAttribute('aria-label', label);
+        }
+
+        function renderFeedback(data) {
+            const active = Boolean(data && data.TrackId);
+            feedbackEl.hidden = !active;
+            if (!active) return;
+            renderThumb(thumbUp, Boolean(data.Loved), 'up');
+            renderThumb(thumbDown, Boolean(data.Hated), 'down');
+        }
+
+        async function sendFeedback(score) {
+            if (!lastTrackData || !lastTrackData.TrackId) return;
+            const trackId = lastTrackData.TrackId;
+            const previous = {
+                Loved: Boolean(lastTrackData.Loved),
+                Hated: Boolean(lastTrackData.Hated),
+            };
+            // Pressing the thumb that is already filled withdraws the vote; the
+            // server mirrors this, so keep the optimistic state in step.
+            const withdrawing = (score === 1 && previous.Loved)
+                || (score === -1 && previous.Hated);
+            lastTrackData = {
+                ...lastTrackData,
+                Loved: withdrawing ? false : score === 1,
+                Hated: withdrawing ? false : score === -1,
+            };
+            renderFeedback(lastTrackData);
+            try {
+                const res = await fetch(`/api/feedback/${score}`, { method: 'POST' });
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const data = await res.json();
+                if (lastTrackData && data.TrackId === lastTrackData.TrackId) {
+                    lastTrackData = {
+                        ...lastTrackData,
+                        Loved: Boolean(data.Loved),
+                        Hated: Boolean(data.Hated),
+                    };
+                    renderFeedback(lastTrackData);
+                }
+            } catch (err) {
+                // Refused or offline: put the previous verdict back (unless the
+                // stream already moved on to another track).
+                if (lastTrackData && lastTrackData.TrackId === trackId) {
+                    lastTrackData = { ...lastTrackData, ...previous };
+                    renderFeedback(lastTrackData);
+                }
+                console.error('Failed to submit feedback:', err);
+            }
+        }
+
+        for (const btn of [thumbUp, thumbDown]) {
+            btn.addEventListener('click', () => {
+                sendFeedback(Number(btn.dataset.score));
+            });
+        }
+
         // --- Sleep timer ------------------------------------------------------
         // The timer is server-owned (`POST /api/sleep/{mode}`) so it keeps
         // counting while the phone is asleep and survives a page reload; this
@@ -660,10 +791,161 @@
             if (!sleepBtn.closest('.picker').contains(e.target)) closeSleepMenu();
         });
         document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape') closeSleepMenu();
+            if (e.key !== 'Escape') return;
+            if (settingsPopup && !settingsPopup.hidden) closeSettings();
+            else closeSleepMenu();
         });
 
         renderSleep();
+
+        // --- Settings modal ------------------------------------------------------
+        // Quick toggles (behaviour flags) + theme selector. Every change goes to
+        // the server (`POST /api/settings`), which persists it to the project-root
+        // `.env` - the ground truth - and applies it to the running config.
+        const settingsBtn = document.getElementById('settings-btn');
+        const settingsPopup = document.getElementById('settings-popup');
+        const settingsClose = document.getElementById('settings-close');
+        const settingsThemeSelect = document.getElementById('settings-theme');
+        const settingsSwitches = [...settingsPopup.querySelectorAll('.switch input[data-setting]')];
+        let settingsThemes = [];
+        let currentSettings = null;
+
+        function renderSettings() {
+            for (const input of settingsSwitches) {
+                input.checked = Boolean(currentSettings && currentSettings[input.dataset.setting]);
+            }
+            // Submission is a no-op without a token, so that switch is disabled
+            // (and its row dimmed) until LISTENBRAINZ_TOKEN is configured.
+            const tokenReady = Boolean(currentSettings && currentSettings.LISTENBRAINZ_TOKEN);
+            const submission = settingsSwitches.find(
+                (input) => input.dataset.setting === 'LISTENBRAINZ_SUBMIT'
+            );
+            if (submission) {
+                submission.disabled = !tokenReady;
+                const row = submission.closest('.settings-row');
+                if (row) {
+                    row.classList.toggle('disabled', !tokenReady);
+                    row.title = tokenReady
+                        ? ''
+                        : 'Set LISTENBRAINZ_TOKEN in .env to enable.';
+                }
+            }
+        }
+
+        function renderThemeOptions() {
+            const current = (currentSettings && currentSettings.THEME) || currentTheme;
+            const names = [...new Set([current, ...settingsThemes])];
+            settingsThemeSelect.replaceChildren();
+            for (const name of names) {
+                const option = document.createElement('option');
+                option.value = name;
+                option.textContent = name;
+                settingsThemeSelect.appendChild(option);
+            }
+            settingsThemeSelect.value = names.includes(current) ? current : '';
+        }
+
+        async function loadSettings() {
+            try {
+                const res = await fetch('/api/settings');
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const data = await res.json();
+                currentSettings = data.Settings || null;
+                settingsThemes = Array.isArray(data.Themes) ? data.Themes : [];
+                renderSettings();
+                renderThemeOptions();
+            } catch (err) {
+                console.error('Failed to load settings:', err);
+                const message = err instanceof Error ? err.message : '';
+                renderThemeError(/^HTTP \d+$/.test(message) ? message : 'network error');
+            }
+        }
+
+        // A missing/failing `/api/settings` (typically a web server older than
+        // this page) must not leave an unexplained blank dropdown.
+        function renderThemeError(detail) {
+            settingsThemeSelect.replaceChildren();
+            const option = document.createElement('option');
+            option.value = '';
+            option.textContent = `Couldn't load themes (${detail})`;
+            option.disabled = true;
+            settingsThemeSelect.appendChild(option);
+            settingsThemeSelect.value = '';
+        }
+
+        async function setSetting(key, value) {
+            try {
+                const res = await fetch('/api/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ [key]: value }),
+                });
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const data = await res.json();
+                currentSettings = data.Settings || currentSettings;
+                renderSettings();
+                return true;
+            } catch (err) {
+                console.error(`Failed to set ${key}:`, err);
+                return false;
+            }
+        }
+
+        async function setTheme(name) {
+            try {
+                const res = await fetch('/api/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ THEME: name }),
+                });
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const data = await res.json();
+                currentSettings = data.Settings || currentSettings;
+                // Hot-swap the sheet client-side; the server keeps the theme in .env.
+                const meta = document.querySelector('meta[name="nowplaying-theme"]');
+                if (meta) meta.content = name;
+                applyTheme(name, lastArtVersion);
+                renderThemeOptions();
+            } catch (err) {
+                console.error('Failed to set theme:', err);
+                // Snap the selector back to the last known-good theme.
+                renderThemeOptions();
+            }
+        }
+
+        function openSettings() {
+            closeSleepMenu();
+            settingsPopup.hidden = false;
+            document.body.classList.add('no-scroll');
+            settingsBtn.setAttribute('aria-expanded', 'true');
+            void loadSettings();
+        }
+
+        function closeSettings() {
+            settingsPopup.hidden = true;
+            document.body.classList.remove('no-scroll');
+            settingsBtn.setAttribute('aria-expanded', 'false');
+        }
+
+        settingsBtn.addEventListener('click', () => {
+            if (settingsPopup.hidden) openSettings();
+            else closeSettings();
+        });
+        settingsClose.addEventListener('click', closeSettings);
+        settingsPopup.addEventListener('click', (e) => {
+            if (e.target === settingsPopup) closeSettings();
+        });
+        settingsThemeSelect.addEventListener('change', (e) => {
+            void setTheme(e.target.value);
+        });
+        for (const input of settingsSwitches) {
+            input.addEventListener('change', () => {
+                void setSetting(input.dataset.setting, input.checked).then((ok) => {
+                    // A rejected change snaps the native checkbox back to server state.
+                    if (!ok) renderSettings();
+                });
+            });
+        }
 
         // --- Media Session API ----------------------------------------------
         // Publishes the track to the OS (lock screen, media keys, Bluetooth
@@ -1004,15 +1286,12 @@
         // Similar tracks: ListenBrainz Labs' co-listening score per recording.
         function buildSimilarTable(tracks) {
             const table = buildTable([
-                ['#', 'num'], ['', ''], ['Artist', ''], ['Title', ''],
+                ['', ''], ['Artist', ''], ['Title', ''],
                 ['Album', ''], ['Match', 'num'],
             ]);
             const body = table.tBodies[0];
-            tracks.forEach((track, index) => {
+            tracks.forEach((track) => {
                 const row = body.insertRow();
-                const rank = row.insertCell();
-                rank.className = 'num';
-                rank.textContent = String(index + 1);
                 const art = row.insertCell();
                 if (typeof track.Cover === 'string' && track.Cover.startsWith('https://')) {
                     const img = document.createElement('img');
@@ -1056,15 +1335,12 @@
         // Similar artists: LB Radio's artist pool, one sample track per artist.
         function buildArtistTable(artists) {
             const table = buildTable(
-                [['#', 'num'], ['Artist', ''], ['Sample track', ''], ['Listens', 'num']],
+                [['Artist', ''], ['Sample track', ''], ['Listens', 'num']],
                 'artists'
             );
             const body = table.tBodies[0];
-            artists.forEach((artist, index) => {
+            artists.forEach((artist) => {
                 const row = body.insertRow();
-                const rank = row.insertCell();
-                rank.className = 'num';
-                rank.textContent = String(index + 1);
                 const url = listenbrainzUrl(artist.ArtistMBID, 'artist');
                 const artistCell = row.insertCell();
                 linkCell(artistCell, artist.Artist || '', url);

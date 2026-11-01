@@ -14,12 +14,13 @@ import time
 from collections import OrderedDict
 from contextlib import suppress
 from io import BytesIO
+from typing import TypedDict
 
 import httpx
 from loguru import logger
 from PIL import Image, ImageChops
 
-from nowplaying import config, db
+from nowplaying import config, db, listenbrainz
 
 try:
     from curl_cffi import requests as _curl_cffi
@@ -38,6 +39,19 @@ _DEFAULTS = {
 # Fields that identify a track; a signal that only refines the others (e.g.
 # Duration) must not record a second history row for the same track.
 _IDENTITY_FIELDS = ('Artist', 'Album', 'Title')
+
+
+class _ListenTrack(TypedDict):
+    """Track fields captured on write, used when its listen is submitted."""
+
+    artist: str
+    title: str
+    album: str | None
+    duration: int | None
+    mbid: str | None
+    release_group_id: str | None
+
+
 _EMOJI_RE = re.compile(
     r'[\U0001F600-\U0001F64F]'   # Emoticons
     r'|[\U0001F300-\U0001F5FF]'  # Symbols & Pictographs
@@ -53,6 +67,7 @@ _HTTP = httpx.Client(
 )
 atexit.register(_HTTP.close)
 _MB_MIN_INTERVAL = 1.1  # MusicBrainz requires <= 1 request/second
+_QUICK_SETTINGS_POLL_SECONDS = 5.0
 _QUALIFIER_WORDS = frozenset({
     'remaster', 'remastered', 'remix', 'remixed', 'mix', 'live', 'edit',
     'version', 'mono', 'stereo', 'demo', 'acoustic', 'instrumental',
@@ -490,6 +505,13 @@ class TrackMonitor:
         self._last_identity: tuple[str, str, str] | None = None
         self._last_track_id: int | None = None
 
+        # ListenBrainz submission state for the current play: the furthest
+        # position seen (our played-time estimate), whether the listen already
+        # went out, and the payload captured when the track was written.
+        self._max_position_ms = 0
+        self._listen_submitted = False
+        self._listen_track: _ListenTrack | None = None
+
         if os.path.exists(COVER_FILE):
             self._last_cover_key = db.latest_cover_key(self._conn)
         else:
@@ -599,6 +621,61 @@ class TrackMonitor:
             db.set_position(self._conn, position_ms)
         except Exception as e:
             logger.warning(f'[Error] could not store position: {e}')
+            return
+        self._track_listen(position_ms)
+
+    def _track_listen(self, position_ms: int) -> None:
+        """Submit one listen once the current play passes the play-time gate."""
+
+        if self._listen_track is None or not config.LISTENBRAINZ_SUBMIT:
+            return
+        threshold = config.LISTENBRAINZ_MIN_PLAY_MS
+        if position_ms < 1000 and self._max_position_ms >= threshold:
+            # Repeat-one: the player restarted the track, so this is a new play.
+            self._listen_submitted = False
+            self._max_position_ms = position_ms
+        # The furthest position, not the current one: a seek backwards must not
+        # erase the played time already counted.
+        self._max_position_ms = max(self._max_position_ms, position_ms)
+        if not self._listen_submitted and self._max_position_ms >= threshold:
+            self._listen_submitted = True
+            self._submit_listen()
+
+    @staticmethod
+    def _log_listen(fut: concurrent.futures.Future) -> None:
+        """Log a failed listen submission; never raise (also on shutdown)."""
+        try:
+            fut.result()
+        except asyncio.CancelledError:
+            return
+        except Exception as e:
+            logger.warning(f'[listenbrainz] listen not submitted: {e}')
+
+    def _submit_listen(self) -> None:
+        """Ship the current play to ListenBrainz; never blocks the worker."""
+
+        track = self._listen_track
+        if track is None:
+            return
+        logger.debug(f'[listenbrainz] submitting {track["artist"]} - {track["title"]}')
+        try:
+            fut = asyncio.run_coroutine_threadsafe(
+                listenbrainz.submit_listen(
+                    artist=track['artist'],
+                    title=track['title'],
+                    album=track['album'],
+                    duration_ms=track['duration'],
+                    recording_mbid=track['mbid'],
+                    release_group_mbid=track['release_group_id'],
+                    # ListenBrainz wants the playback start, not "now".
+                    listened_at=int(time.time()) - self._max_position_ms // 1000,
+                ),
+                self._loop,
+            )
+        except Exception:
+            logger.debug('[listenbrainz] failed to schedule listen submission')
+            return
+        fut.add_done_callback(self._log_listen)
 
     def _recording(
         self, artist: str, title: str, album: str | None
@@ -685,6 +762,10 @@ class TrackMonitor:
     def write(self) -> None:
         """Persist once the metadata is complete."""
 
+        # Re-read the dashboard's quick settings here: this write is exactly when
+        # auto-skip is decided, so a toggle applies to the very next track
+        # instead of waiting for the watcher's poll.
+        config.reload_quick_settings()
         logger.success(f'[write] {self.track_info}')
 
         if not self._is_complete():
@@ -737,6 +818,10 @@ class TrackMonitor:
                 review = critiquebrainz_review(release_group_id)
 
         try:
+            # Read before record_history/set_position overwrite them: the newest
+            # row and the position of the play that is ending.
+            previous_history = db.latest_history(self._conn)
+            previous_position = db.current_position(self._conn)
             track_id = db.resolve_track(
                 self._conn,
                 artist,
@@ -751,14 +836,37 @@ class TrackMonitor:
             logger.debug(f'[write] resolved track_id={track_id} mbid={mbid}')
             self._last_track_id = track_id
             self._last_identity = (artist, album_name, title)
-            skip_count = db.skip_count(self._conn, track_id)
-            auto = config.SKIP_FOREVER and skip_count >= 3
-            logger.debug(f'[write] skip_count={skip_count} auto_skip={auto}')
+            feedback = db.feedback_score(self._conn, track_id)
+            # Only a hated verdict auto-skips (there is no skip counter any
+            # more - `feedback` is the single verdict store).
+            auto = config.AUTOSKIP and feedback == listenbrainz.FEEDBACK_HATE
+            logger.debug(f'[write] feedback={feedback} auto_skip={auto}')
             db.record_history(self._conn, track_id, auto_skipped=auto)
             db.set_position(self._conn, 0)
         except Exception as e:
             logger.critical(f'[Error] could not write to database: {e}')
             auto = False
+            self._listen_track = None
+        else:
+            self._listen_track = {
+                'artist': artist,
+                'title': title,
+                'album': album,
+                'duration': duration,
+                'mbid': mbid,
+                'release_group_id': release_group_id,
+            }
+            self._max_position_ms = 0
+            # A restart re-writes the track that is already playing; the
+            # position continued, so that play was already submitted.
+            continuing = (
+                previous_history is not None
+                and previous_position >= config.LISTENBRAINZ_MIN_PLAY_MS
+                and previous_history[1] == track_id
+            )
+            # Auto-skipped tracks never reach the dashboard, so they don't
+            # reach ListenBrainz either.
+            self._listen_submitted = bool(auto or continuing)
 
         if auto:
             logger.info(f"[Auto-skip] {artist} - {album_name} - {title}")
@@ -767,37 +875,81 @@ class TrackMonitor:
             logger.info(f"[Updated Track] {artist} - {album_name} - {self.track_info['Title']}")
 
 
+async def _watch_quick_settings(interval: float = _QUICK_SETTINGS_POLL_SECONDS) -> None:
+    """Reload quick settings from the `.env` file so dashboard toggles apply live.
+
+    The web server persists dashboard setting changes to the project-root `.env`;
+    this polls it and re-applies the flags into the config module without a restart.
+    """
+
+    try:
+        previous = config.quick_settings_from_disk()
+        while True:
+            await asyncio.sleep(interval)
+            current = config.quick_settings_from_disk()
+            if current == previous:
+                continue
+            previous = dict(current)
+            logger.info(f'[settings] quick settings reloaded from {config.ENV_PATH}: {current}')
+            config.reload_quick_settings()
+    except Exception:
+        # A settings reload must never take the monitor down with it.
+        logger.exception('[settings] quick-settings watcher stopped')
+
+
 def main():
+    async def _log_token() -> None:
+        """Log once at startup whether the ListenBrainz token is usable."""
+
+        try:
+            user = await listenbrainz.validate_token()
+        except listenbrainz.ListenBrainzError as exc:
+            logger.warning(f'[listenbrainz] token check failed: {exc}')
+            return
+        if user:
+            logger.info(f'[listenbrainz] submitting listens as {user}')
+        else:
+            logger.warning('[listenbrainz] token invalid; listens will not be submitted')
+
     async def _amain() -> None:
         loop = asyncio.get_running_loop()
         monitor = TrackMonitor(loop=loop)
         logger.debug(f'DB: {config.DB_PATH} | cover: {config.COVER_FILE}')
         logger.debug(f'Source: {config.SOURCE}')
 
-        if config.SOURCE == 'windows':
-            from nowplaying.sources.windows_source import WindowsSource
-            source = WindowsSource(monitor, loop)
-            try:
+        token_check = (
+            asyncio.create_task(_log_token()) if config.LISTENBRAINZ_SUBMIT else None
+        )
+        quick_settings = asyncio.create_task(_watch_quick_settings())
+        try:
+            if config.SOURCE == 'windows':
+                from nowplaying.sources.windows_source import WindowsSource
+                source = WindowsSource(monitor, loop)
                 await source.run()
-            finally:
-                monitor.close()
-        else:
-            from nowplaying.sources.dbus_source import DbusSource
-            from nowplaying.sources.mpris_source import MprisSource
+            else:
+                from nowplaying.sources.dbus_source import DbusSource
+                from nowplaying.sources.mpris_source import MprisSource
 
-            async def _run_source(source, name: str) -> None:
-                try:
-                    await source.run()
-                except Exception:
-                    logger.exception(f'[Error] {name} source terminated unexpectedly')
+                async def _run_source(source, name: str) -> None:
+                    try:
+                        await source.run()
+                    except Exception:
+                        logger.exception(f'[Error] {name} source terminated unexpectedly')
 
-            try:
                 await asyncio.gather(
                     _run_source(DbusSource(monitor, loop), 'BlueZ'),
                     _run_source(MprisSource(monitor, loop), 'MPRIS'),
                 )
-            finally:
-                monitor.close()
+        finally:
+            if token_check is not None:
+                token_check.cancel()
+                with suppress(asyncio.CancelledError):
+                    await token_check
+            quick_settings.cancel()
+            with suppress(asyncio.CancelledError):
+                await quick_settings
+            monitor.close()
+            await listenbrainz.aclose()
 
     try:
         asyncio.run(_amain())

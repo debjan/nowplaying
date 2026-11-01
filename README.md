@@ -66,8 +66,7 @@ uv sync --extra dbus
 uv run nowplaying        # monitor + web UI on http://<device-ip>:4940
 ```
 
-Run the halves separately when needed: `uv run nowplaying-monitor` (producer:
-BlueZ + MPRIS via D-Bus) and `uv run nowplaying-web` (consumer only).
+Run the halves separately when needed: `uv run nowplaying-monitor` (producer: BlueZ + MPRIS via D-Bus) and `uv run nowplaying-web` (consumer only).
 
 ### Windows
 
@@ -88,13 +87,13 @@ All knobs are env vars (real env -> `.env` -> defaults). See `.env.example`.
 | `NOWPLAYING_COVER`                    | `<data-dir>/cover.png`                 | Trimmed album-art image file                                  |
 | `NOWPLAYING_HOST` / `NOWPLAYING_PORT` | `0.0.0.0` / `4940`                     | Web server bind                                               |
 | `NOWPLAYING_SOURCE`                   | `dbus` on Linux / `windows` on Windows | Track source backend (`dbus` = BlueZ+MPRIS, `windows` = SMTC) |
-| `YT_DLP`                              | *(off)*                                | Allow the yt-dlp YouTube search fallback for album art        |
-| `FANART_API_KEY`                      | *(shared project key)*                 | Fanart.tv key (falls back to built-in project key)            |
-| `SKIP_FOREVER`                        | *(off)*                                | Auto-skip tracks skipped via Next 3+ times                    |
-| `PREVIOUS_LOVE`                       | *(off)*                                | Show a heart for tracks Previous-ed via 3+ times              |
-| `PLAYERCTL_PLAYER`                    | *(empty)*                              | Hardcode MPRIS player if needed                               |
 | `NOWPLAYING_DEBUG`                    | *(off)*                                | Verbose logging to `NOWPLAYING_DEBUG_LOG`                     |
+| `YT_DLP`                              | *(off)*                                | Allow the yt-dlp YouTube search fallback for album art        |
+| `AUTOSKIP`                            | *(on)*                                 | Auto-skip hated tracks (thumbs down) when they come up        |
 | `THEME`                               | *(empty)*                              | Selected theme instead default adaptive theme                 |
+| `PLAYERCTL_PLAYER`                    | *(empty)*                              | Hardcode MPRIS player if needed                               |
+
+`LISTENBRAINZ_TOKEN` (optional) enables listen submission and the love/hate thumbs; see `.env.example` for the full ListenBrainz block.
 
 ## HTTP API
 
@@ -108,23 +107,26 @@ I made this after plugging my amp to my raspberry pi, making it bluetooth receiv
 - **Smart home / wall-mounted dashboard** - show what's playing on a shared speaker or Hi-Fi in a living room, office, updating live.
 - **Home theater / music room display** - a tiny screen showing track, artist, album art, review and progress bar while audio plays from any source.
 - **LAN remote control** - the built-in buttons drive the active player (`playerctl` on Linux, SMTC on Windows), so you can pause/skip without touching the source.
-- **Playback history / stats** - the monitor records every track change as a row in the `history` table, so play history and listening stats can be queried from the same database.
-- **Skip / auto-skip** - pressing **Next** counts a skip for the current track in the `skips` table (always recorded). With `SKIP_FOREVER` enabled, any track skipped 3 or more times is auto-skipped (`playerctl next`) the next time it plays; auto-skipped tracks are logged to `history` (as `auto_skipped`) but never shown as the current track.
-- **Favourites / loved** - pressing **Previous** while a track is playing counts a favourite for that track in the `favourites` table (always recorded). With `PREVIOUS_LOVE` enabled, a track favoured 3 or more times is shown as **loved** with a heart icon on its Title row.
+- **Playback history / stats** - the monitor records every track change as a row in the `history` table (timestamps in local time), so play history and listening stats can be queried from the same database.
+- **Auto-skip** -with `AUTOSKIP` on (the default), a **hated** track (thumbs down) is auto-skipped (`playerctl next`) the next time it plays.
+- **Love / hate** - the thumbs pill on the album art is the loved/hated state, stored as one `score` per track in the `feedback` table (1 = loved, -1 = hated, 0 = none). **Thumbs up** loves the track, **thumbs down** hates it and jumps to the next track; pressing the filled thumb again withdraws the vote (score back to 0). With `AUTOSKIP` on, a hated track is skipped the next time it plays. With a ListenBrainz token the vote (love / hate / withdrawal) is submitted as feedback.
 
 ## Deployment
 
-Linux only - units in `systemd/` (the two halves run as separate services, so
-the monitor unit uses `nowplaying-monitor` to avoid starting a second web
-server):
+Linux: unit in `systemd/` :
 
 ```bash
-cp systemd/nowplaying.service systemd/nowplaying-web.service ~/.config/systemd/user/
+cp systemd/nowplaying.service ~/.config/systemd/user/
 systemctl --user daemon-reload
-systemctl --user enable --now nowplaying nowplaying-web
+systemctl --user enable --now nowplaying
 ```
 
-For a single systemd unit instead, point one unit at
-`ExecStart=... uv run nowplaying` and drop `nowplaying-web.service`.
-
 Windows: no service file - run `uv run nowplaying`, or schedule it via Task Scheduler.
+
+## Credits
+
+- Icons provided by [Phosphor](https://phosphoricons.com/)
+
+## License
+
+MIT
