@@ -6,8 +6,8 @@ Universal "now playing" dashboard that captures track metadata from **any media 
 
 | Platform             | Sources (auto-detected)                                                                                                                                          |
 | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Linux / Raspberry Pi | Bluetooth A2DP phones/tablets via BlueZ `MediaPlayer1` (system D-Bus) + local players via MPRIS (`Spotify`, `VLC`, `mpv`, browsers, ...) (session D-Bus)         |
-| Windows              | Any app integrated with System Media Transport Controls - `Spotify`, browsers (`YouTube`, `SoundCloud`, ...), `Apple Music`, local players, ... via SMTC/`winrt` |
+| Linux / Raspberry Pi | Bluetooth A2DP phones/tablets via BlueZ `MediaPlayer1` (system D-Bus) + local players via MPRIS (Spotify, VLC, mpv, browsers, ...) (session D-Bus)               |
+| Windows              | Any app integrated with System Media Transport Controls - Spotify, browsers (YouTube, SoundCloud, ...), Apple Music, local players, ... via SMTC/winrt           |
 
 ## How it works
 
@@ -44,8 +44,8 @@ flowchart LR
     WEB -->|"skip/pause control<br/>playerctl (Linux) / SMTC (Windows)"| BT
 ```
 
-- **Monitor** (`nowplaying` command): single `TrackMonitor` fed by one platform backend (auto-detected, override with `NOWPLAYING_SOURCE=dbus|windows`). On Linux it runs BlueZ + MPRIS concurrently (last-change-wins), while on Windows subscribes to SMTC `MediaPropertiesChanged`/`TimelinePropertiesChanged` so **any** app with system media controls is tracked (Spotify, browser tabs, etc.). Every signal is applied atomically and written only on real change (one `history` row per track change, position ticks stay out of `history`). It also resolves covers (`MusicBrainz` release-group → `Fanart.tv` → `coverartarchive` → optional `yt-dlp` YouTube thumbnail), album reviews (`AllMusic` → `CritiqueBrainz`), caching per album.
-- **Web server** (`uvicorn nowplaying.web:app`): FastAPI app that serves the dashboard, versioned album art and one SSE stream multiplexing `track` + `position` + `status` events with `: ping` heartbeats. Playback buttons (`POST /api/player/{play-pause,next,previous}`) drive `playerctl` on Linux or SMTC on Windows.
+- **Monitor**: single `TrackMonitor` fed by one platform backend. On Linux it runs BlueZ + MPRIS concurrently (last-change-wins), while on Windows subscribes to SMTC so **any** app with system media controls is tracked (Spotify, browser tabs, etc.). Every signal is applied atomically and written only on real change. It also resolves covers (MusicBrainz release-group -> Fanart.tv -> coverartarchive.org -> optional `yt-dlp` YouTube thumbnail), album reviews (AllMusic -> CritiqueBrainz), caching per album.
+- **Web server**: FastAPI app that serves the dashboard, versioned album art and one SSE stream multiplexing `track` + `position` + `status` events with `ping` heartbeats. Playback buttons drive `playerctl` on Linux or SMTC on Windows.
 
 ## Requirements
 
@@ -108,7 +108,7 @@ I made this after plugging my amp to my raspberry pi, making it bluetooth receiv
 - **Home theater / music room display** - a tiny screen showing track, artist, album art, review and progress bar while audio plays from any source.
 - **LAN remote control** - the built-in buttons drive the active player (`playerctl` on Linux, SMTC on Windows), so you can pause/skip without touching the source.
 - **Playback history / stats** - the monitor records every track change as a row in the `history` table (timestamps in local time), so play history and listening stats can be queried from the same database.
-- **Auto-skip** -with `AUTOSKIP` on (the default), a **hated** track (thumbs down) is auto-skipped (`playerctl next`) the next time it plays.
+- **Auto-skip** -with `AUTOSKIP` on (the default), a **hated** track (thumbs down) is auto-skipped the next time it plays.
 - **Love / hate** - the thumbs pill on the album art is the loved/hated state, stored as one `score` per track in the `feedback` table (1 = loved, -1 = hated, 0 = none). **Thumbs up** loves the track, **thumbs down** hates it and jumps to the next track; pressing the filled thumb again withdraws the vote (score back to 0). With `AUTOSKIP` on, a hated track is skipped the next time it plays. With a ListenBrainz token the vote (love / hate / withdrawal) is submitted as feedback.
 
 ## Deployment
