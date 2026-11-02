@@ -72,7 +72,7 @@ Run the halves separately when needed: `uv run nowplaying-monitor` (producer: Bl
 
 ```powershell
 uv sync --extra windows
-uv run nowplaying        # SMTC monitor + web UI on http://localhost:4940
+uv run nowplaying        # SMTC monitor + web UI on http://<device-ip>:4940
 ```
 
 Data dir: `~/.local/share/nowplaying/` on Linux, `%LOCALAPPDATA%\nowplaying\` on Windows. Override with `NOWPLAYING_DB` / `NOWPLAYING_COVER`. Source auto-detects from OS; force with `NOWPLAYING_SOURCE=dbus|windows`.
@@ -113,7 +113,7 @@ I made this after plugging my amp to my raspberry pi, making it bluetooth receiv
 
 ## Deployment
 
-Linux: unit in `systemd/` :
+Linux: Copy unit in `~/.config/systemd/user/` after updating placeholders in the service file:
 
 ```bash
 cp systemd/nowplaying.service ~/.config/systemd/user/
