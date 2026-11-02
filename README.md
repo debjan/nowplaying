@@ -125,7 +125,7 @@ Windows: no service file - run `uv run nowplaying`, or schedule it via Task Sche
 
 ## Credits
 
-- Icons provided by [Phosphor](https://phosphoricons.com/)
+Icons provided by [Phosphor](https://phosphoricons.com/)
 
 ## License
 

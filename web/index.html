@@ -78,17 +78,32 @@
                 </button>
             </div>
             <div class="picker">
-                <button type="button" id="sleep-btn" class="picker-btn" aria-haspopup="menu" aria-expanded="false" title="Sleep timer">
+                <button type="button" id="sleep-btn" class="picker-btn" aria-haspopup="true" aria-controls="sleep-menu" aria-expanded="false" title="Sleep timer">
                     <svg class="picker-icon"><use href="#icon-sleep"/></svg>
                     <span id="sleep-label" class="picker-label"></span>
                 </button>
-                <ul id="sleep-menu" class="picker-menu" role="menu" hidden>
-                    <li role="menuitemradio" data-mode="15" aria-checked="false">15 min</li>
-                    <li role="menuitemradio" data-mode="30" aria-checked="false">30 min</li>
-                    <li role="menuitemradio" data-mode="60" aria-checked="false">60 min</li>
-                    <li role="menuitemradio" data-mode="end" aria-checked="false">End of song</li>
-                    <li role="menuitemradio" data-mode="off" aria-checked="false" hidden>Off</li>
-                </ul>
+                <div id="sleep-menu" class="picker-menu" role="radiogroup" aria-label="Sleep timer" hidden>
+                    <label class="picker-option">
+                        <input type="radio" name="sleep-mode" value="15">
+                        <span>15 min</span>
+                    </label>
+                    <label class="picker-option">
+                        <input type="radio" name="sleep-mode" value="30">
+                        <span>30 min</span>
+                    </label>
+                    <label class="picker-option">
+                        <input type="radio" name="sleep-mode" value="60">
+                        <span>60 min</span>
+                    </label>
+                    <label class="picker-option">
+                        <input type="radio" name="sleep-mode" value="end">
+                        <span>End of song</span>
+                    </label>
+                    <label class="picker-option" id="sleep-off-option" hidden>
+                        <input type="radio" name="sleep-mode" value="off">
+                        <span>Off</span>
+                    </label>
+                </div>
             </div>
         </div>
         <div class="main">
@@ -712,9 +727,8 @@
         const sleepBtn = document.getElementById('sleep-btn');
         const sleepLabel = document.getElementById('sleep-label');
         const sleepMenu = document.getElementById('sleep-menu');
-        const sleepOff = sleepMenu.querySelector('[data-mode="off"]');
-        const sleepChoices = [...sleepMenu.querySelectorAll('li[data-mode]')]
-            .filter((li) => li !== sleepOff);
+        const sleepOffOption = document.getElementById('sleep-off-option');
+        const sleepRadios = [...sleepMenu.querySelectorAll('input[name="sleep-mode"]')];
         let sleepMode = null;
         let sleepEndsAt = null;
 
@@ -736,11 +750,9 @@
         function renderSleep() {
             const armed = Boolean(sleepMode);
             sleepBtn.classList.toggle('armed', armed);
-            sleepBtn.setAttribute('aria-pressed', String(armed));
-            sleepOff.hidden = !armed;
-            sleepOff.setAttribute('aria-checked', 'false');
-            for (const li of sleepChoices) {
-                li.setAttribute('aria-checked', String(li.dataset.mode === sleepMode));
+            sleepOffOption.hidden = !armed;
+            for (const input of sleepRadios) {
+                input.checked = input.value === sleepMode;
             }
             if (!armed) {
                 sleepLabel.textContent = '';
@@ -778,13 +790,20 @@
             toggleSleepMenu();
         });
 
-        sleepMenu.addEventListener('click', (e) => {
-            const li = e.target.closest('li[data-mode]');
-            if (!li) return;
-            // Selecting the armed mode again (or "Off") cancels the timer.
-            const mode = li.dataset.mode === sleepMode ? 'off' : li.dataset.mode;
+        for (const input of sleepRadios) {
+            input.addEventListener('click', (e) => {
+                if (input.value !== sleepMode || input.value === 'off') return;
+                e.preventDefault();
+                closeSleepMenu();
+                void setSleep('off');
+            });
+        }
+
+        sleepMenu.addEventListener('change', (e) => {
+            const input = e.target.closest('input[name="sleep-mode"]');
+            if (!input) return;
             closeSleepMenu();
-            void setSleep(mode);
+            void setSleep(input.value);
         });
 
         document.addEventListener('click', (e) => {

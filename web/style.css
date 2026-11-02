@@ -295,7 +295,7 @@ span.centered {
     height: 1.4rem;
     flex-shrink: 0;
     color: var(--foreground-color);
-    stroke: color-mix(in srgb, var(--accent-color), var(--background-color) 65%);
+    stroke: color-mix(in srgb, var(--accent-color), var(--background-color) 50%);
 }
 
 .track-icon:not(.review) {
@@ -487,17 +487,23 @@ span.centered {
     top: calc(100% + 4px);
     right: 0;
     z-index: 10;
-    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
     margin: 0;
-    padding: 0.25rem;
-    min-width: 9rem;
+    padding: 0.35rem;
+    min-width: 10rem;
     background: var(--background-color);
     border: 1px solid var(--shadow-color);
     border-radius: 8px;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
 }
 
-.picker-menu li {
+.picker-menu[hidden] {
+    display: none;
+}
+
+.picker-option {
     display: flex;
     align-items: center;
     gap: 0.4rem;
@@ -510,17 +516,68 @@ span.centered {
 }
 
 /* `display: flex` above would otherwise beat the UA `[hidden]` rule. */
-.picker-menu li[hidden] {
+.picker-option[hidden] {
     display: none;
 }
 
-.picker-menu li:hover {
-    background: color-mix(in srgb, var(--background-color), var(--foreground-color) 10%);
+@media (hover: hover) {
+    .picker-option:hover {
+        background: color-mix(in srgb, var(--background-color), var(--foreground-color) 10%);
+    }
 }
 
-.picker-menu li[aria-checked="true"] {
+/* Native radios, restyled as accent dots. */
+.picker-option input[type="radio"] {
+    appearance: none;
+    -webkit-appearance: none;
+    display: grid;
+    place-content: center;
+    flex-shrink: 0;
+    width: 1.05rem;
+    height: 1.05rem;
+    margin: 0;
+    border: 2px solid var(--shadow-color);
+    border-radius: 50%;
+    cursor: pointer;
+}
+
+.picker-option input[type="radio"]::before {
+    content: "";
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: 50%;
+    background: var(--accent-color);
+    transform: scale(0);
+    transition: transform 0.1s ease;
+}
+
+.picker-option input[type="radio"]:checked {
+    border-color: var(--accent-color);
+}
+
+.picker-option input[type="radio"]:checked::before {
+    transform: scale(1);
+}
+
+.picker-option input[type="radio"]:focus-visible {
+    outline: 2px solid var(--accent-color);
+    outline-offset: 2px;
+}
+
+.picker-option:has(input:checked) {
     font-weight: 700;
     color: var(--accent-color);
+}
+
+@media (max-width: 600px) {
+    .picker-menu {
+        min-width: 12rem;
+    }
+
+    .picker-option {
+        min-height: 24px;
+        white-space: nowrap;
+    }
 }
 
 /* Review / Settings popup (shared chrome) */
