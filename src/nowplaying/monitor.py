@@ -15,6 +15,7 @@ from collections import OrderedDict
 from contextlib import suppress
 from io import BytesIO
 from typing import TypedDict
+from urllib.parse import unquote, urlsplit
 
 import httpx
 from loguru import logger
@@ -49,6 +50,7 @@ class _ListenTrack(TypedDict):
     album: str | None
     duration: int | None
     mbid: str | None
+    artist_mbid: str | None
     release_group_id: str | None
 
 
@@ -87,6 +89,11 @@ _BROWSER_UA = (
 )
 _LDJSON_RE = re.compile(
     r'<script[^>]+type="application/ld\+json"[^>]*>(.*?)</script>', re.DOTALL
+)
+_DIV_TAG_RE = re.compile(r'<(/?)div\b[^>]*>', re.IGNORECASE)
+_WIKI_HEADING_RE = re.compile(r'^(={2,6})\s*(.+?)\s*\1$')
+_WIKI_BIO_HEADING_RE = re.compile(
+    r'biograph|early life|life and career', re.IGNORECASE
 )
 
 logger.remove()
@@ -328,8 +335,8 @@ def get_release(artist: str, album: str, mb_limiter: RateLimiter) -> str | None:
 
 def get_recording(
     artist: str, title: str, album: str | None, mb_limiter: RateLimiter
-) -> tuple[str | None, int | None] | None:
-    """Return `(recording_mbid, length_ms)` from the MusicBrainz recording search."""
+) -> tuple[str | None, str | None, int | None] | None:
+    """Return `(recording_mbid, artist_mbid, length_ms)` from the MusicBrainz search."""
 
     query_title = _clean_title(title)
     artist_term = _mb_term(artist)
@@ -352,14 +359,20 @@ def get_recording(
             if data := response.json().get('recordings'):
                 if difflib.SequenceMatcher(None, data[0]['title'], query_title).ratio() > 0.8:
                     mbid = data[0].get('id')
+                    credits = data[0].get('artist-credit') or []
+                    credited = (credits[0] or {}).get('artist') or {}
+                    artist_mbid = credited.get('id')
                     length = data[0].get('length')
-                    logger.debug(f'[musicbrainz] recording {mbid} length {length}')
-                    return mbid, int(length) if length else None
+                    logger.debug(
+                        f'[musicbrainz] recording {mbid} artist {artist_mbid} '
+                        f'length {length}'
+                    )
+                    return mbid, artist_mbid, int(length) if length else None
             logger.debug(f'[musicbrainz] No recording match for "{artist}" - "{title}"')
         except Exception as e:
             logger.warning(f'[musicbrainz] Error: {e}')
             return None
-    return None, None
+    return None, None, None
 
 
 def fanart_cover(release_group_id: str) -> str | None:
@@ -473,6 +486,155 @@ def allmusic_review(release_group_id: str, mb_limiter: RateLimiter) -> str | Non
         logger.warning(f'[allmusic] Error: {e}')
 
 
+def _extract_div_by_id(page: str, element_id: str) -> str | None:
+    """Inner HTML of the first `<div id="...">`, honouring nested divs."""
+
+    opening = re.search(
+        rf'<div\b[^>]*\bid="{re.escape(element_id)}"[^>]*>',
+        page,
+        re.IGNORECASE,
+    )
+    if opening is None:
+        return None
+    depth = 1
+    for tag in _DIV_TAG_RE.finditer(page, opening.end()):
+        depth += -1 if tag.group(1) else 1
+        if depth == 0:
+            return page[opening.end() : tag.start()]
+    return page[opening.end() :]
+
+
+def _html_text(fragment: str) -> str:
+    """Strip tags into readable plain text, one paragraph per line."""
+
+    fragment = re.sub(
+        r'<(script|style)\b.*?</\1>', ' ', fragment, flags=re.IGNORECASE | re.DOTALL
+    )
+    text = re.sub(
+        r'<(?:br\s*/?|/p|/div|/li|/h[1-6])\s*>', '\n', fragment, flags=re.IGNORECASE
+    )
+    text = re.sub(r'<[^>]+>', '', text)
+    text = html.unescape(text)
+    lines = [' '.join(line.split()) for line in text.splitlines()]
+    return '\n'.join(line for line in lines if line)
+
+
+def _allmusic_page_biography(page: str) -> str | None:
+    """AllMusic artist biography from the page's `biography` div."""
+
+    inner = _extract_div_by_id(page, 'biography')
+    if inner is None:
+        return None
+    # The heading carries the artist name and author credit; the dialog already
+    # names the artist, so keep only the prose.
+    inner = re.sub(r'<h3\b.*?</h3>', ' ', inner, flags=re.IGNORECASE | re.DOTALL)
+    return _html_text(inner) or None
+
+
+def _wikidata_wikipedia_url(wikidata_url: str) -> str | None:
+    """Return the English Wikipedia URL for a Wikidata entity URL."""
+
+    wikidata_id = wikidata_url.rstrip('/').rsplit('/', 1)[-1]
+    if not wikidata_id:
+        return None
+    response = _HTTP.get(
+        'https://www.wikidata.org/w/api.php',
+        params={
+            'action': 'wbgetentities',
+            'format': 'json',
+            'props': 'sitelinks/urls',
+            'ids': wikidata_id,
+            'sitefilter': 'enwiki',
+        },
+    )
+    response.raise_for_status()
+    entity = response.json().get('entities', {}).get(wikidata_id, {})
+    url = ((entity.get('sitelinks') or {}).get('enwiki') or {}).get('url')
+    return str(url) if url else None
+
+
+def _wikipedia_biography(url: str) -> str | None:
+    """Plain-text biography section of an English Wikipedia article."""
+
+    path = urlsplit(url).path
+    if '/wiki/' not in path:
+        return None
+    title = unquote(path.split('/wiki/', 1)[1]).replace('_', ' ')
+    if not title:
+        return None
+    response = _HTTP.get(
+        'https://en.wikipedia.org/w/api.php',
+        params={
+            'action': 'query',
+            'prop': 'extracts',
+            'explaintext': 1,
+            'exsectionformat': 'wiki',
+            'redirects': 1,
+            'titles': title,
+            'format': 'json',
+            'formatversion': 2,
+        },
+    )
+    response.raise_for_status()
+    pages = response.json().get('query', {}).get('pages') or []
+    text = (pages[0].get('extract') if pages else None) or ''
+    lines = text.splitlines()
+    start: int | None = None
+    level = 0
+    for index, line in enumerate(lines):
+        if (heading := _WIKI_HEADING_RE.match(line)) is None:
+            continue
+        if start is None:
+            if _WIKI_BIO_HEADING_RE.search(heading.group(2)):
+                start = index + 1
+                level = len(heading.group(1))
+        elif len(heading.group(1)) <= level:
+            return '\n'.join(lines[start:index]).strip() or None
+    if start is not None:
+        return '\n'.join(lines[start:]).strip() or None
+    return None
+
+
+def artist_biography(artist_mbid: str, mb_limiter: RateLimiter) -> str | None:
+    """Return an artist biography: AllMusic first, English Wikipedia after."""
+
+    try:
+        mb_limiter.wait()
+        response = _HTTP.get(
+            f'https://musicbrainz.org/ws/2/artist/{artist_mbid}',
+            params={'inc': 'url-rels', 'fmt': 'json'},
+        )
+        response.raise_for_status()
+        relations = response.json().get('relations') or []
+    except Exception as e:
+        logger.warning(f'[biography] MusicBrainz error: {e}')
+        return None
+
+    resources = {
+        r['type']: r['url']['resource']
+        for r in relations
+        if r.get('type') in ('allmusic', 'wikidata') and r.get('url')
+    }
+    if allmusic_url := resources.get('allmusic'):
+        # A broken AllMusic fetch must not cost us the Wikipedia fallback.
+        try:
+            _ALLMUSIC_LIMITER.wait()
+            logger.debug(f'[allmusic] Processing artist {allmusic_url}')
+            if biography := _allmusic_page_biography(_allmusic_page(allmusic_url)):
+                return biography
+            logger.debug(f'[allmusic] No biography in {allmusic_url}')
+        except Exception as e:
+            logger.warning(f'[allmusic] Biography error: {e}')
+    if wikidata_url := resources.get('wikidata'):
+        try:
+            if wikipedia_url := _wikidata_wikipedia_url(wikidata_url):
+                logger.debug(f'[wikipedia] Processing {wikipedia_url}')
+                return _wikipedia_biography(wikipedia_url)
+        except Exception as e:
+            logger.warning(f'[wikipedia] Biography error: {e}')
+    return None
+
+
 class TrackMonitor:
     """Tracks the current track (BlueZ and/or MPRIS); writes it out only when something changed."""
 
@@ -491,9 +653,11 @@ class TrackMonitor:
         )
         self._mb_limiter = RateLimiter(_MB_MIN_INTERVAL)
         self._review_attempted: set[tuple[str, str]] = set()
+        self._biography_attempted: set[str] = set()
         self._duration_attempted: set[tuple[str, str]] = set()
         self._recording_cache: dict[
-            tuple[str, str, str | None], tuple[str | None, int | None]
+            tuple[str, str, str | None],
+            tuple[str | None, str | None, int | None],
         ] = {}
         # Lookups MusicBrainz could not answer, with the time they failed: not
         # cached as a result, so a later playback tries again.
@@ -666,6 +830,7 @@ class TrackMonitor:
                     album=track['album'],
                     duration_ms=track['duration'],
                     recording_mbid=track['mbid'],
+                    artist_mbid=track['artist_mbid'],
                     release_group_mbid=track['release_group_id'],
                     # ListenBrainz wants the playback start, not "now".
                     listened_at=int(time.time()) - self._max_position_ms // 1000,
@@ -679,8 +844,8 @@ class TrackMonitor:
 
     def _recording(
         self, artist: str, title: str, album: str | None
-    ) -> tuple[str | None, int | None] | None:
-        """`(recording_mbid, length_ms)` from MusicBrainz, cached per track."""
+    ) -> tuple[str | None, str | None, int | None] | None:
+        """`(recording_mbid, artist_mbid, length_ms)` from MusicBrainz, cached per track."""
 
         key = (artist, title, album)
         if key in self._recording_cache:
@@ -700,13 +865,21 @@ class TrackMonitor:
         self._recording_cache[key] = result
         return result
 
-    def _mbid_for(self, artist: str, title: str, album: str | None) -> str | None:
-        """Recording MBID for the track: MusicBrainz first, stored value after."""
+    def _mbids_for(
+        self, artist: str, title: str, album: str | None
+    ) -> tuple[str | None, str | None]:
+        """Recording and artist MBIDs: MusicBrainz first, stored values after."""
 
         recording = self._recording(artist, title, album)
-        if recording and recording[0]:
-            return recording[0]
-        return db.mbid_for(self._conn, artist, title)
+        if recording:
+            recording_mbid, artist_mbid = recording[0], recording[1]
+            return (
+                recording_mbid or db.mbid_for(self._conn, artist, title),
+                artist_mbid or db.artist_mbid_for(self._conn, artist),
+            )
+        return db.mbid_for(self._conn, artist, title), db.artist_mbid_for(
+            self._conn, artist
+        )
 
     def _fallback_duration(
         self, artist: str, title: str, album: str | None
@@ -721,7 +894,7 @@ class TrackMonitor:
         if recording is None:
             return None  # MusicBrainz unreachable: retry on a later playback
         self._duration_attempted.add((artist, title))
-        return recording[1]
+        return recording[2]
 
     def apply(self, fields: dict[str, str]) -> None:
         """Apply one D-Bus signal's field updates; write once if anything changed."""
@@ -792,10 +965,20 @@ class TrackMonitor:
             duration = self._fallback_duration(artist, title, album)
 
         try:
-            mbid = self._mbid_for(artist, title, album)
+            mbid, artist_mbid = self._mbids_for(artist, title, album)
         except Exception:
             logger.exception('[Error] MusicBrainz recording lookup failed')
-            mbid = None
+            mbid = artist_mbid = None
+
+        biography = None
+        if artist_mbid and artist not in self._biography_attempted:
+            self._biography_attempted.add(artist)
+            try:
+                if not db.biography_for(self._conn, artist):
+                    biography = artist_biography(artist_mbid, self._mb_limiter)
+                    logger.debug(f'[write] biography={"yes" if biography else "none"}')
+            except Exception:
+                logger.exception('[Error] artist biography lookup failed')
 
         if duration:
             try:
@@ -832,6 +1015,8 @@ class TrackMonitor:
                 release_group_id,
                 review,
                 mbid,
+                artist_mbid,
+                biography,
             )
             logger.debug(f'[write] resolved track_id={track_id} mbid={mbid}')
             self._last_track_id = track_id
@@ -854,6 +1039,7 @@ class TrackMonitor:
                 'album': album,
                 'duration': duration,
                 'mbid': mbid,
+                'artist_mbid': artist_mbid,
                 'release_group_id': release_group_id,
             }
             self._max_position_ms = 0

@@ -1,4 +1,4 @@
-"""ListenBrainz similarity data: similar recordings and similar artists.
+"""ListenBrainz similarity data: similar recordings.
 
 **Track similarity** comes from ListenBrainz Labs' precomputed
 ``similar-recordings`` datasets (session based: recordings played in the same
@@ -12,14 +12,6 @@ Coverage is patchy and effectively random per seed, so `SIMILAR_SOURCES` lists
 several datasets/algorithms that are tried in order until one of them knows the
 seed (`similar_recordings`). Unlike the core API these endpoints tolerate
 unmapped seeds - an unknown recording answers with an empty list, not an error.
-
-**Artist similarity** has no equivalent dataset used here; the seed recording is
-resolved to its artist MBID and LB Radio's artist pool (that artist plus its
-most similar ones) is shown, one sample recording per artist:
-
-1. ``POST /1/metadata/recording``     recording MBID -> artist MBID
-2. ``GET  /1/lb-radio/artist/<mbid>`` recordings from the artist + similar ones
-3. ``POST /1/metadata/recording``     sample MBIDs -> title
 
 The core API is rate limited to one request per second and requires a
 descriptive User-Agent (https://listenbrainz.readthedocs.io/en/latest/users/api/index.html),
@@ -47,7 +39,6 @@ USER_AGENT = config.LISTENBRAINZ_USER_AGENT
 MIN_INTERVAL = 1.1  # docs: never more than ONE call per second
 LABS_MIN_INTERVAL = 0.3  # the Labs dataset hoster is not rate limited
 METADATA_BATCH = 50  # recordings per POST /1/metadata/recording call
-MODES = ('easy', 'medium', 'hard')
 
 # Listen submission / feedback (needs a user token, see config).
 SUBMISSION_CLIENT = 'nowplaying'
@@ -119,10 +110,6 @@ _similar_cache: OrderedDict[tuple[str, str], tuple[float, list[dict[str, Any]]]]
 _rescue_cache: OrderedDict[tuple[str], tuple[float, list[dict[str, Any]]]] = (
     OrderedDict()
 )
-# (artist mbid, mode, max_similar_artists, max_recordings_per_artist) -> artists.
-_artist_cache: OrderedDict[
-    tuple[str, str, int, int], tuple[float, list[dict[str, Any]]]
-] = OrderedDict()
 
 # recording mbid -> (expiry, metadata); a seed is resolved once per dialog/call
 _metadata_cache: OrderedDict[str, tuple[float, dict[str, Any]]] = OrderedDict()
@@ -235,6 +222,7 @@ async def submit_listen(
     album: str | None = None,
     duration_ms: int | None = None,
     recording_mbid: str | None = None,
+    artist_mbid: str | None = None,
     release_group_mbid: str | None = None,
     listened_at: int | None = None,
 ) -> None:
@@ -257,6 +245,8 @@ async def submit_listen(
         additional['duration_ms'] = int(duration_ms)
     if recording_mbid:
         additional['recording_mbid'] = recording_mbid
+    if artist_mbid:
+        additional['artist_mbids'] = [artist_mbid]
     if release_group_mbid:
         additional['release_group_mbid'] = release_group_mbid
     metadata['additional_info'] = additional
@@ -356,30 +346,6 @@ async def recording_info(recording_mbid: str) -> dict[str, Any]:
         'length_ms': recording.get('length'),
         'cover_url': _cover_url(release.get('mbid')),
     }
-
-
-async def radio_recordings_for_artist(
-    artist_mbid: str,
-    *,
-    mode: str = 'easy',
-    max_similar_artists: int = 5,
-    max_recordings_per_artist: int = 1,
-    pop_begin: float = 0.0,
-    pop_end: float = 100.0,
-) -> dict[str, list[dict[str, Any]]]:
-    """Recordings for LB Radio seeded on one artist."""
-
-    return await _request(
-        'GET',
-        f'/1/lb-radio/artist/{artist_mbid}',
-        params={
-            'mode': mode,
-            'max_similar_artists': max_similar_artists,
-            'max_recordings_per_artist': max_recordings_per_artist,
-            'pop_begin': pop_begin,
-            'pop_end': pop_end,
-        },
-    )
 
 
 def _cached(
@@ -626,93 +592,3 @@ async def _with_artist_mbids(rows: list[dict[str, Any]]) -> list[dict[str, Any]]
             row['artist_mbid'] = _artist_mbid(details.get(row['recording_mbid']) or {})
     return rows
 
-
-async def similar_artists(
-    recording_mbid: str,
-    *,
-    mode: str = 'easy',
-    max_similar_artists: int = 10,
-    max_recordings_per_artist: int = 1,
-    limit: int = 0,
-    refresh: bool = False,
-) -> list[dict[str, Any]]:
-    """Artists similar to the artist behind `recording_mbid` (seed excluded).
-
-    The seed recording is resolved to its artist MBID and LB Radio's artist pool
-    is used as the similarity source; every pool artist contributes one sample
-    recording. Each row is `{artist, artist_mbid, recording_mbid, title,
-    listen_count}`. The pool depends on the *artist*, not on the seed recording,
-    so it is cached per artist MBID - every later track of that artist reuses
-    it. Results are cached for `CACHE_TTL` seconds; pass `refresh=True` to
-    bypass the cache.
-    """
-
-    recording_mbid = _clean_mbid(recording_mbid)
-    if mode not in MODES:
-        raise ListenBrainzError(f'unknown LB Radio mode {mode!r}')
-
-    artist_mbid = (await recording_info(recording_mbid))['artist_mbid']
-    if not artist_mbid:
-        raise ListenBrainzError(f'recording {recording_mbid} has no artist MBID')
-
-    key = (artist_mbid, mode, max_similar_artists, max_recordings_per_artist)
-    rows = _cached(_artist_cache, key, refresh=refresh)
-    if rows is None:
-        rows = await _fetch_similar_artists(
-            artist_mbid,
-            mode=mode,
-            max_similar_artists=max_similar_artists,
-            max_recordings_per_artist=max_recordings_per_artist,
-        )
-        _store(_artist_cache, key, rows)
-    return _clip(rows, limit)
-
-
-async def _fetch_similar_artists(
-    artist_mbid: str,
-    *,
-    mode: str,
-    max_similar_artists: int,
-    max_recordings_per_artist: int,
-) -> list[dict[str, Any]]:
-    """Uncached lookup: artist -> LB Radio pool -> artist rows."""
-
-    pool = await radio_recordings_for_artist(
-        artist_mbid,
-        mode=mode,
-        max_similar_artists=max_similar_artists,
-        max_recordings_per_artist=max_recordings_per_artist,
-    )
-
-    artists: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for pool_artist_mbid, entries in pool.items():
-        if pool_artist_mbid == artist_mbid:  # the seed's own artist
-            continue
-        sample = next(
-            (entry for entry in entries or [] if entry.get('recording_mbid')), None
-        )
-        if sample is None:
-            continue
-        candidate = str(sample['recording_mbid']).lower()
-        if candidate in seen:
-            continue
-        seen.add(candidate)
-        artists.append(
-            {
-                'artist': sample.get('similar_artist_name'),
-                'artist_mbid': sample.get('similar_artist_mbid') or pool_artist_mbid,
-                'recording_mbid': candidate,
-                'title': None,
-                'listen_count': sample.get('total_listen_count') or 0,
-            }
-        )
-    if not artists:
-        return []
-
-    # One batched metadata call names the sample recordings (cached per mbid).
-    details = await recording_metadata([artist['recording_mbid'] for artist in artists])
-    for artist in artists:
-        detail = details.get(artist['recording_mbid']) or {}
-        artist['title'] = (detail.get('recording') or {}).get('name')
-    return artists

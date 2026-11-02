@@ -14,8 +14,10 @@ SCHEMA = """
 PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS artists (
-  id    INTEGER PRIMARY KEY AUTOINCREMENT,
-  title TEXT UNIQUE NOT NULL
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  title      TEXT UNIQUE NOT NULL,
+  mbid       TEXT,
+  biography  TEXT
 );
 
 CREATE TABLE IF NOT EXISTS albums (
@@ -72,6 +74,7 @@ CREATE INDEX IF NOT EXISTS idx_history_track_id ON history(track_id);
 # separate versioned migration list.
 _EXTRA_COLUMNS: dict[str, dict[str, str]] = {
     'tracks': {'mbid': 'TEXT'},
+    'artists': {'mbid': 'TEXT', 'biography': 'TEXT'},
 }
 
 # Columns older builds wrote and nothing reads any more (`tracks.description`).
@@ -270,6 +273,8 @@ def resolve_track(
     release_group_id: str | None = None,
     review: str | None = None,
     mbid: str | None = None,
+    artist_mbid: str | None = None,
+    biography: str | None = None,
 ) -> int:
     """Upsert artist/album/track and return the stable `track_id` (no commit)."""
 
@@ -277,8 +282,13 @@ def resolve_track(
     title = _normalize(title)
 
     conn.execute(
-        'INSERT INTO artists(title) VALUES (?) ON CONFLICT(title) DO NOTHING',
-        (artist,),
+        """
+        INSERT INTO artists(title, mbid, biography) VALUES (?, ?, ?)
+        ON CONFLICT(title) DO UPDATE SET
+            mbid      = COALESCE(excluded.mbid, artists.mbid),
+            biography = COALESCE(excluded.biography, artists.biography)
+        """,
+        (artist, artist_mbid, biography),
     )
     artist_id = conn.execute(
         'SELECT id FROM artists WHERE title = ?', (artist,)
@@ -428,6 +438,26 @@ def mbid_for(conn: sqlite3.Connection, artist: str, title: str) -> str | None:
         ORDER BY t.id DESC LIMIT 1
         """,
         (_normalize(artist), _normalize(title)),
+    ).fetchone()
+    return row[0] if row else None
+
+
+def artist_mbid_for(conn: sqlite3.Connection, artist: str) -> str | None:
+    """Return any previously stored MusicBrainz artist MBID for an artist."""
+
+    row = conn.execute(
+        'SELECT mbid FROM artists WHERE title = ? AND mbid IS NOT NULL',
+        (_normalize(artist),),
+    ).fetchone()
+    return row[0] if row else None
+
+
+def biography_for(conn: sqlite3.Connection, artist: str) -> str | None:
+    """Return any previously stored artist biography, or `None`."""
+
+    row = conn.execute(
+        'SELECT biography FROM artists WHERE title = ? AND biography IS NOT NULL',
+        (_normalize(artist),),
     ).fetchone()
     return row[0] if row else None
 
@@ -593,7 +623,8 @@ _CURRENT_SQL = """
 SELECT a.title AS Artist, al.title AS Album, t.title AS Title,
        al.id AS AlbumId, al.cover_url AS CoverUrl, t.id AS TrackId,
        t.duration AS Duration,
-       al.review AS Review, t.mbid AS Mbid, COALESCE(fb.score, 0) AS Feedback
+       al.review AS Review, a.biography AS Biography,
+       t.mbid AS Mbid, COALESCE(fb.score, 0) AS Feedback
 FROM history h
 JOIN tracks t ON t.id = h.track_id
 LEFT JOIN albums al ON al.id = t.album_id
@@ -702,8 +733,9 @@ async def aget_current(db_path: str) -> dict | None:
         'TrackId': track[5],
         'Duration': track[6],
         'Review': track[7],
-        'MBID': track[8],
-        'Feedback': track[9],
+        'Biography': track[8],
+        'MBID': track[9],
+        'Feedback': track[10],
     }
 
 

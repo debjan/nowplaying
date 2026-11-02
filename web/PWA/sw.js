@@ -2,7 +2,7 @@
 // navigations network-first (falling back to the cached shell offline) and
 // static assets stale-while-revalidate. Live /api/ data is never cached.
 
-const VERSION = 'v8';
+const VERSION = 'v9';
 const SHELL_CACHE = `shell-${VERSION}`;
 
 const SHELL_URLS = [

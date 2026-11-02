@@ -44,7 +44,6 @@ PLAYERCTL_ACTIONS = frozenset({'play-pause', 'next', 'previous', 'pause'})
 # ListenBrainz "similar" dialogs: how many rows to return by default/max.
 SIMILAR_LIMIT_DEFAULT = 12
 SIMILAR_LIMIT_MAX = 50
-SIMILAR_ARTIST_LIMIT_DEFAULT = 10
 
 if config.SOURCE == 'windows':
     from nowplaying import windows_control
@@ -561,52 +560,6 @@ async def track_similar(
     }
 
 
-@app.get('/api/track/{track_id}/similar-artists')
-async def track_similar_artists(
-    track_id: int,
-    limit: int = SIMILAR_ARTIST_LIMIT_DEFAULT,
-    mode: str = 'easy',
-) -> dict:
-    """ListenBrainz artists similar to the one behind one stored track.
-
-    Seeded on the track's MusicBrainz recording id: `listenbrainz.similar_artists`
-    resolves it to its artist and lists LB Radio's artist pool.
-    """
-
-    if mode not in listenbrainz.MODES:
-        raise HTTPException(status_code=400, detail=f'Invalid mode: {mode}')
-    track_row = await db.aget_track(config.DB_PATH, track_id)
-    if track_row is None:
-        raise HTTPException(status_code=404, detail='Unknown track') from None
-    if not (mbid := track_row.get('MBID')):
-        raise HTTPException(
-            status_code=404, detail='Track has no MusicBrainz recording id'
-        ) from None
-
-    limit = max(1, min(limit, SIMILAR_LIMIT_MAX))
-    try:
-        rows = await listenbrainz.similar_artists(mbid, mode=mode, limit=limit)
-    except listenbrainz.ListenBrainzError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from None
-
-    return {
-        'MBID': mbid,
-        'Artist': track_row.get('Artist'),
-        'Title': track_row.get('Title'),
-        'Mode': mode,
-        'Artists': [
-            {
-                'Artist': row['artist'],
-                'ArtistMBID': row['artist_mbid'],
-                'Title': row['title'],
-                'MBID': row['recording_mbid'],
-                'Listens': row['listen_count'],
-            }
-            for row in rows
-        ],
-    }
-
-
 def _served_cover(track: dict) -> str | None:
     """Map a stored raw cover URL to the served `/cover.png?v=` URL for the frontend.
 
@@ -631,6 +584,7 @@ def _payload(track: dict) -> dict:
         'TrackId': track.get('TrackId'),
         'MBID': track.get('MBID'),
         'Review': track.get('Review'),
+        'Biography': track.get('Biography'),
         'Loved': feedback == 1,
         'Hated': feedback == -1,
         'PlayerctlAvailable': PLAYERCTL_AVAILABLE,
@@ -830,7 +784,12 @@ async def feedback(score: int) -> dict:
     try:
         await db.aset_feedback(config.DB_PATH, track_id, 0 if withdrawing else score)
     except (OSError, sqlite3.Error) as exc:
-        logger.debug(f'[feedback] could not store the verdict: {exc}')
+        # A vote that could not be stored must not skip the track or leave a
+        # remote vote behind: report the failure instead of a false success.
+        logger.warning(f'[feedback] could not store the verdict: {exc}')
+        raise HTTPException(
+            status_code=500, detail='Could not store feedback'
+        ) from None
 
     if score == listenbrainz.FEEDBACK_HATE and not withdrawing:
         try:

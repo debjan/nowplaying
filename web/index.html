@@ -161,7 +161,7 @@
                 <path d="M192,128a64,64,0,0,1-64,64" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/>
                 <circle cx="128" cy="128" r="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/>
             </symbol>
-            <symbol id="icon-review" width="24" height="24" viewBox="0 0 256 256">
+            <symbol id="icon-info" width="24" height="24" viewBox="0 0 256 256">
                 <path d="M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm-4,48a12,12,0,1,1-12,12A12,12,0,0,1,124,72Zm12,112a16,16,0,0,1-16-16V128a8,8,0,0,1,0-16,16,16,0,0,1,16,16v40a8,8,0,0,1,0,16Z"/>
             </symbol>
             <symbol id="icon-note" width="24" height="24" viewBox="0 0 256 256"><rect width="256" height="256" stroke="none"/>
@@ -240,6 +240,14 @@
     </div>
     <script>
         if ('serviceWorker' in navigator) {
+            let hadController = Boolean(navigator.serviceWorker.controller);
+            navigator.serviceWorker.addEventListener('controllerchange', () => {
+                if (!hadController) {
+                    hadController = true; // first install claimed this page
+                    return;
+                }
+                window.location.reload();
+            });
             window.addEventListener('load', () => {
                 navigator.serviceWorker.register('/sw.js').catch((err) => {
                     console.error('Service worker registration failed:', err);
@@ -279,10 +287,8 @@
                     lastRenderKey = null;
                     lastTrackData = null;
                     similarActive = false;
-                    similarArtistsActive = false;
                     similarProbedId = null;
                     similarCheckSeq += 1; // drop an in-flight probe
-                    similarArtistCheckSeq += 1;
                     if (data && data.error) {
                         trackEl.innerHTML = data.error;
                     } else {
@@ -294,8 +300,8 @@
                     return;
                 }
                 // A MusicBrainz recording id makes the track's ListenBrainz
-                // lookups possible (see openSimilar / openSimilarArtists below);
-                // what they return decides whether the icons show at all.
+                // similar-tracks lookup possible (see openSimilar below); what
+                // it returns decides whether the title icon shows at all.
                 currentMbid = typeof data.MBID === 'string' && data.MBID ? data.MBID : null;
                 const id = data.TrackId;
                 if (id !== lastTrackId) {
@@ -315,15 +321,12 @@
                     // Unknown until the probes answer: both icons need real
                     // ListenBrainz rows before they show up.
                     similarActive = false;
-                    similarArtistsActive = false;
                     similarCheckSeq += 1; // drop a probe started for the old track
-                    similarArtistCheckSeq += 1;
-                    similarProbedId = null; // the new track gets its own probes
+                    similarProbedId = null; // the new track gets its own probe
                 }
                 if (currentMbid && id && id !== similarProbedId) {
                     similarProbedId = id;
                     void checkSimilar(id);
-                    void checkSimilarArtists(id);
                 }
                 lastTrackData = data;
                 durationMs = Number(data.Duration) || 0;
@@ -345,7 +348,7 @@
                 // SSE re-emits the current track on every reconnect.
                 const renderKey = JSON.stringify([
                     data.Artist, data.Album, data.Title,
-                    data.Loved, data.Hated, data.Review, data.MBID,
+                    data.Loved, data.Hated, data.Review, data.Biography, data.MBID,
                 ]);
                 if (renderKey === lastRenderKey) {
                     playerctlAvailable = data.PlayerctlAvailable;
@@ -356,23 +359,21 @@
                 playerctlAvailable = data.PlayerctlAvailable;
             };
 
-            // Render the Artist / Album / Title rows for `data`. Both ListenBrainz
-            // icons only appear once a probe has confirmed there is something to
-            // show: the Labs datasets have no row for many tracks and LB Radio's
-            // artist pool is empty for many artists (a click would then open an
-            // empty dialog).
+            // Render the Artist / Album / Title rows for `data`. The ListenBrainz
+            // icon only appears once a probe has confirmed there are similar
+            // recordings to show: the Labs datasets have no row for many tracks
+            // (a click would then open an empty dialog).
             function renderRows(data) {
-                const similarArtist = similarArtistsActive;
                 const similarTrack = similarActive;
                 const rows = [
                     {
-                        icon: similarArtist ? 'icon-listenbrainz' : 'icon-user',
+                        icon: data.Biography ? 'icon-info' : 'icon-user',
                         text: data.Artist,
-                        popup: similarArtist ? 'artists' : null,
+                        biography: data.Biography,
                     },
                     ...(data.Album && data.Album !== data.Title
                         ? [{
-                            icon: data.Review ? 'icon-review' : 'icon-disc',
+                            icon: data.Review ? 'icon-info' : 'icon-disc',
                             text: data.Album,
                             review: data.Review,
                         }]
@@ -384,31 +385,32 @@
                     },
                 ];
                 trackEl.innerHTML = '';
-                rows.forEach(({ icon, text, review, popup }) => {
+                rows.forEach(({ icon, text, review, biography, popup }) => {
                     const row = document.createElement('div');
                     row.className = 'track-row';
                     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
                     svg.classList.add('track-icon');
-                    if (review) svg.classList.add('review');
+                    if (review || biography) svg.classList.add('review');
                     const use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
                     use.setAttribute('href', `#${icon}`);
                     svg.appendChild(use);
                     const value = document.createElement('span');
                     value.textContent = text;
                     row.append(svg, value);
-                    if (review) {
+                    if (review || biography) {
+                        const content = biography || review;
                         row.classList.add('has-review');
-                        row.title = 'Read the album review';
+                        row.title = biography
+                            ? 'Read the artist biography'
+                            : 'Read the album review';
                         row.addEventListener('click', (e) => {
                             e.stopPropagation();
-                            openReview(review, `${data.Artist} - ${data.Album}`);
-                        });
-                    } else if (popup === 'artists') {
-                        row.classList.add('has-similar');
-                        row.title = 'Show similar artists';
-                        row.addEventListener('click', (e) => {
-                            e.stopPropagation();
-                            openSimilarArtists(data.TrackId, `Similar to ${data.Artist}`);
+                            openReview(
+                                content,
+                                biography
+                                    ? `${data.Artist} - Biography`
+                                    : `${data.Artist} - ${data.Album}`
+                            );
                         });
                     } else if (popup === 'recordings') {
                         row.classList.add('has-similar');
@@ -443,27 +445,6 @@
                 }
                 if (seq !== similarCheckSeq || !tracks.length) return;
                 similarActive = true;
-                renderCurrentRows(trackId);
-            }
-
-            // The same probe for LB Radio's artist pool: many artists have no
-            // similar ones, so the artist row only becomes clickable once the
-            // pool is known to hold at least one artist. The pool is resolved
-            // from the recording's artist, so this costs a metadata lookup plus
-            // the pool call (both cached server-side for an hour).
-            async function checkSimilarArtists(trackId) {
-                const seq = ++similarArtistCheckSeq;
-                let artists;
-                try {
-                    const res = await fetch(`/api/track/${trackId}/similar-artists?limit=1`);
-                    if (!res.ok) return; // no MBID / API down: stay plain
-                    const body = await res.json();
-                    artists = body && Array.isArray(body.Artists) ? body.Artists : [];
-                } catch {
-                    return; // offline: leave the plain artist icon
-                }
-                if (seq !== similarArtistCheckSeq || !artists.length) return;
-                similarArtistsActive = true;
                 renderCurrentRows(trackId);
             }
 
@@ -563,12 +544,8 @@
         // title row only becomes clickable once it does) and the last payload it
         // was rendered from, so the probe can re-render the rows when it answers.
         let similarActive = false;
-        // Whether ListenBrainz has similar *artists* for the current track's
-        // artist (LB Radio's pool is empty for many of them).
-        let similarArtistsActive = false;
         let similarProbedId = null;
         let similarCheckSeq = 0;
-        let similarArtistCheckSeq = 0;
         let lastTrackData = null;
         const progressBar = document.getElementById('progress');
         const progressFill = document.getElementById('progress-fill');
@@ -1228,7 +1205,6 @@
         const popupClose = document.getElementById('review-close');
 
         const SIMILAR_LIMIT = 12;
-        const SIMILAR_ARTIST_LIMIT = 10;
 
         function resetPopupMode() {
             popupCard.classList.remove('wide');
@@ -1351,47 +1327,9 @@
             return table;
         }
 
-        // Similar artists: LB Radio's artist pool, one sample track per artist.
-        function buildArtistTable(artists) {
-            const table = buildTable(
-                [['Artist', ''], ['Sample track', ''], ['Listens', 'num']],
-                'artists'
-            );
-            const body = table.tBodies[0];
-            artists.forEach((artist) => {
-                const row = body.insertRow();
-                const url = listenbrainzUrl(artist.ArtistMBID, 'artist');
-                const artistCell = row.insertCell();
-                linkCell(artistCell, artist.Artist || '', url);
-                // The sample track points at the recording on ListenBrainz.
-                const trackUrl = listenbrainzUrl(artist.MBID, 'recording');
-                const trackCell = row.insertCell();
-                linkCell(
-                    trackCell,
-                    artist.Title || '',
-                    trackUrl,
-                    'Open the recording on ListenBrainz'
-                );
-                const listens = row.insertCell();
-                listens.className = 'num';
-                listens.textContent = typeof artist.Listens === 'number'
-                    ? artist.Listens.toLocaleString()
-                    : '';
-                if (url) {
-                    row.classList.add('linked');
-                    row.title = 'Open the artist on ListenBrainz';
-                    row.addEventListener('click', (event) => {
-                        if (event.target.closest('a')) return;
-                        window.open(url, '_blank', 'noopener');
-                    });
-                }
-            });
-            return table;
-        }
-
-        // Shared dialog loader for both ListenBrainz lookups: opens the wide
-        // table popup, fetches `url`, and renders `data[field]` with `build`.
-        // `similarSeq` invalidates a fetch whose popup has since been replaced.
+        // Shared dialog loader: opens the wide table popup, fetches `url`, and
+        // renders `data[field]` with `build`. `similarSeq` invalidates a fetch
+        // whose popup has since been replaced.
         async function loadPopupTable({ label, url, field, noun, build, empty }) {
             const seq = ++similarSeq;
             resetPopupMode();
@@ -1441,19 +1379,6 @@
                 noun: 'similar tracks',
                 build: buildSimilarTable,
                 empty: 'No similar tracks found for this track yet.',
-            });
-        }
-
-        // Similar artists for the current track's artist.
-        function openSimilarArtists(trackId, label) {
-            if (!trackId) return;
-            return loadPopupTable({
-                label,
-                url: `/api/track/${trackId}/similar-artists?limit=${SIMILAR_ARTIST_LIMIT}`,
-                field: 'Artists',
-                noun: 'similar artists',
-                build: buildArtistTable,
-                empty: 'No similar artists found for this artist yet.',
             });
         }
 

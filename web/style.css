@@ -273,8 +273,8 @@ span.centered {
     }
 }
 
-/* The Artist/Title rows of a track with a MusicBrainz id open a ListenBrainz
-   dialog (similar artists / similar tracks). */
+/* The Title row of a track with a MusicBrainz id opens a ListenBrainz
+   dialog (similar tracks). */
 
 .track-row.has-similar {
     cursor: pointer;
