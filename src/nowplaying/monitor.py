@@ -99,10 +99,7 @@ _WIKI_BIO_HEADING_RE = re.compile(
 logger.remove()
 logger.add(sys.stderr, level='WARNING')
 if config.DEBUG:
-    try:
-        logger.add(config.DEBUG_LOG, level='DEBUG', rotation='50 MB')
-    except OSError as exc:
-        logger.warning(f'[log] cannot open debug log {config.DEBUG_LOG}: {exc}')
+    logger.add(config.DEBUG_LOG, level='DEBUG', rotation='50 MB')
 
 
 def cover_url(url: str) -> str:
@@ -983,20 +980,19 @@ class TrackMonitor:
             except Exception:
                 logger.exception('[Error] artist biography lookup failed')
 
-        if duration:
-            try:
-                cover, release_group_id = self._cover_for(
-                    self.track_info['Artist'],
-                    self.track_info['Album'],
-                    self.track_info['Title'],
-                )
-                logger.debug(f'[write] cover={cover} release_group_id={release_group_id}')
-            except Exception:
-                logger.exception('[Error] cover lookup failed; persisting track without art')
-                cover = release_group_id = None
+        try:
+            cover, release_group_id = self._cover_for(
+                self.track_info['Artist'],
+                self.track_info['Album'],
+                self.track_info['Title'],
+            )
+            logger.debug(f'[write] cover={cover} release_group_id={release_group_id}')
+        except Exception:
+            logger.exception('[Error] cover lookup failed; persisting track without art')
+            cover = release_group_id = None
 
-            if cover and album is None:
-                album = title
+        if cover and album is None:
+            album = title
 
         if release_group_id and (artist, album_name) not in self._review_attempted:
             self._review_attempted.add((artist, album_name))

@@ -28,6 +28,8 @@ class WindowsSource:
         self._session_tokens: list[tuple] = []
         self._manager_token = None
         self._stop = asyncio.Event()
+        # Last timeline duration seen, used to apply a late non-zero value once.
+        self._timeline_duration_ms = 0
 
     async def run(self) -> None:
         """Request the session manager and run until cancelled or closed."""
@@ -140,12 +142,13 @@ class WindowsSource:
     def _on_media_properties_changed(self, sender, args) -> None:
         self._bridge(self._fetch_media_properties())
 
-    async def _fetch_media_properties(self) -> None:
+    async def _fetch_media_properties(self, timeline=None) -> None:
         if self.session is None:
             return
         try:
             props = await self.session.try_get_media_properties_async()
-            timeline = self.session.get_timeline_properties()
+            if timeline is None:
+                timeline = self.session.get_timeline_properties()
         except Exception:
             logger.debug('[winrt] media properties not ready')
             return
@@ -154,6 +157,7 @@ class WindowsSource:
         duration_ms = 0
         if timeline is not None:
             duration_ms = int(timeline.end_time.total_seconds() * 1000)
+        self._timeline_duration_ms = duration_ms
         fields = {
             'Title': props.title or '',
             'Artist': props.artist or '',
@@ -177,3 +181,8 @@ class WindowsSource:
             return
         position_ms = int(timeline.position.total_seconds() * 1000)
         self.monitor.submit(self.monitor.set_position, position_ms)
+        duration_ms = int(timeline.end_time.total_seconds() * 1000)
+        if duration_ms <= 0:
+            self._timeline_duration_ms = 0
+        elif duration_ms != self._timeline_duration_ms:
+            await self._fetch_media_properties(timeline)
