@@ -99,7 +99,10 @@ _WIKI_BIO_HEADING_RE = re.compile(
 logger.remove()
 logger.add(sys.stderr, level='WARNING')
 if config.DEBUG:
-    logger.add(config.DEBUG_LOG, level='DEBUG', rotation='50 MB')
+    try:
+        logger.add(config.DEBUG_LOG, level='DEBUG', rotation='50 MB')
+    except OSError as exc:
+        logger.warning(f'[log] cannot open debug log {config.DEBUG_LOG}: {exc}')
 
 
 def cover_url(url: str) -> str:

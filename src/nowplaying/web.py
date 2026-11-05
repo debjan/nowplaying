@@ -3,6 +3,7 @@ import colorsys
 import hashlib
 import json
 import re
+import secrets
 import shutil
 import sqlite3
 import time
@@ -14,7 +15,7 @@ from typing import NamedTuple
 import aiofiles
 import aiofiles.os
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import (
     FileResponse,
     HTMLResponse,
@@ -283,6 +284,31 @@ def _not_modified(request: Request, etag: str) -> bool:
 
 def _not_modified_response(etag: str) -> Response:
     return Response(status_code=304, headers={'ETag': etag, 'Cache-Control': 'no-cache'})
+
+
+async def require_trusted(request: Request) -> None:
+    """Reject state-changing requests that did not come from the dashboard.
+
+    Browsers label every request with `Sec-Fetch-Site`; a page on another
+    origin can fire a simple cross-site form POST at us without a preflight,
+    so anything not `same-origin`/`none` is refused. Requests without the
+    header (older browsers, curl, scripts on the LAN) fall back to the
+    optional shared secret in `NOWPLAYING_TOKEN`; leaving it empty keeps a
+    fresh install working.
+    """
+
+    site = request.headers.get('sec-fetch-site')
+    if site is not None:
+        if site not in ('same-origin', 'none'):
+            raise HTTPException(status_code=403, detail='Cross-site request blocked')
+        return
+    if not config.TOKEN:
+        return
+    supplied = request.headers.get('x-nowplaying-token', '')
+    if not secrets.compare_digest(supplied, config.TOKEN):
+        raise HTTPException(
+            status_code=403, detail='Missing or invalid X-Nowplaying-Token'
+        )
 
 
 _THEME_META = b'<meta name="nowplaying-theme" content="">'
@@ -713,7 +739,7 @@ async def track_stream() -> StreamingResponse:
     )
 
 
-@app.post('/api/player/{action}')
+@app.post('/api/player/{action}', dependencies=[Depends(require_trusted)])
 async def player_control(action: str) -> dict:
     if action not in PLAYERCTL_ACTIONS:
         raise HTTPException(status_code=400, detail=f'Invalid action: {action}')
@@ -763,7 +789,7 @@ def _submit_feedback(mbid: str | None, score: int) -> None:
     task.add_done_callback(_feedback_tasks.discard)
 
 
-@app.post('/api/feedback/{score}')
+@app.post('/api/feedback/{score}', dependencies=[Depends(require_trusted)])
 async def feedback(score: int) -> dict:
     """Love (`1`) or hate (`-1`) the current track; the active thumb toggles off.
 
@@ -949,7 +975,7 @@ async def sleep_state() -> dict[str, object]:
     return _sleep_payload()
 
 
-@app.post('/api/sleep/{mode}')
+@app.post('/api/sleep/{mode}', dependencies=[Depends(require_trusted)])
 async def sleep(mode: str) -> dict[str, object]:
     """Arm (`15`/`30`/`60`/`end`) or cancel (`off`) the sleep timer."""
     if mode not in SLEEP_MODES and mode != 'off':
@@ -1034,7 +1060,7 @@ async def get_settings() -> dict[str, object]:
     return {'Settings': _settings_payload(), 'Themes': themes}
 
 
-@app.post('/api/settings')
+@app.post('/api/settings', dependencies=[Depends(require_trusted)])
 async def update_settings(payload: dict[str, object]) -> dict[str, object]:
     """Update quick settings (`AUTOSKIP` / `LISTENBRAINZ_SUBMIT` / `THEME`).
 

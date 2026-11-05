@@ -17,6 +17,7 @@ over on first run so history isn't orphaned:
     NOWPLAYING_DEBUG_LOG  debug log file (default <data-dir>/nowplaying.log)
     NOWPLAYING_PORT    port for `nowplaying-web` / `python -m nowplaying.web` (default 4940)
     NOWPLAYING_DEBUG   log debug messages to DEBUG_LOG (off by default)
+    NOWPLAYING_TOKEN   shared secret required for LAN POSTs (default empty = off)
     PLAYERCTL_PLAYER   MPRIS player name to control (default empty = playerctl focus)
     YT_DLP             allow the yt-dlp album-art fallback (1/true/yes/on)
     AUTOSKIP           auto-skip hated tracks (default on; AUTOSKIP=0 disables)
@@ -209,6 +210,9 @@ def reload_quick_settings() -> None:
 
 
 HOST = get_env('NOWPLAYING_HOST', '0.0.0.0')
+# Optional shared secret for POST endpoints. Empty keeps a fresh install
+# working; when set, LAN callers must send X-Nowplaying-Token.
+TOKEN = get_env('NOWPLAYING_TOKEN', '').strip()
 # Auto-skip hated tracks (thumbs down) the next time they play.
 # On by default; an old .env's SKIP_FOREVER still controls it when set.
 AUTOSKIP = _flag('AUTOSKIP', default=_flag('SKIP_FOREVER', default=True))
