@@ -859,6 +859,10 @@ SLEEP_MINUTES = {'15': 15, '30': 30, '60': 60}
 SLEEP_MODES = frozenset({*SLEEP_MINUTES, 'end'})
 
 _SLEEP_POLL_SECONDS = 1.0
+# A stored position jumping back by more than this means the track restarted
+# (repeat-one writes no new history row). A large manual seek backwards can
+# also trip it - the same accepted trade-off as the monitor's play gate.
+_SLEEP_RESTART_JUMP_MS = 5000
 
 
 def _sleep_payload() -> dict[str, object]:
@@ -891,28 +895,40 @@ async def _current_track_id() -> int | None:
     return track_id if isinstance(track_id, int) else None
 
 
-async def _reached_track_end(track: dict | None) -> bool:
+async def _reached_track_end(
+    track: dict | None, previous_position: int | None
+) -> tuple[bool, int | None]:
     """Whether the stored position reports the current track at its end.
 
-    The position is polled every ~10s, so this only acts as a safety net for
-    players that repeat one track (which writes no new `history` row).
+    The position is polled every ~10s, so the near-end check alone rarely
+    catches a player that repeats one track (which writes no new `history`
+    row); a large backwards jump also counts as the track restarting. Returns
+    the current position so the caller can track the previous one.
     """
     if not (duration := track.get('Duration') if track else None):
-        return False
+        return False, None
     try:
         position = await db.aget_position(config.DB_PATH)
     except (OSError, sqlite3.Error):
-        return False
-    return position is not None and position[0] >= int(duration) - 500
+        return False, None
+    if position is None:
+        return False, None
+    current = position[0]
+    ended = current >= int(duration) - 500 or (
+        previous_position is not None
+        and previous_position - current > _SLEEP_RESTART_JUMP_MS
+    )
+    return ended, current
 
 
 async def _wait_for_track_end() -> None:
-    """Block until the current track ends (a different track starts)."""
+    """Block until the current track ends (a new track starts, or repeat-one restarts it)."""
     try:
         baseline_history, _, _ = await db.alatest_change_token(config.DB_PATH)
     except (OSError, sqlite3.Error):
         baseline_history = None
     baseline_track = await _current_track_id()
+    previous_position: int | None = None
     while True:
         await asyncio.sleep(_SLEEP_POLL_SECONDS)
         try:
@@ -926,8 +942,11 @@ async def _wait_for_track_end() -> None:
             track = await read_track()
         if baseline_track is not None and track and track.get('TrackId') != baseline_track:
             return
-        if await _reached_track_end(track):
+        ended, position = await _reached_track_end(track, previous_position)
+        if ended:
             return
+        if position is not None:
+            previous_position = position
 
 
 async def _sleep_loop(mode: str) -> None:
