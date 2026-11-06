@@ -537,6 +537,7 @@ async def track_similar(
     track_id: int,
     limit: int = SIMILAR_LIMIT_DEFAULT,
     algorithm: str | None = None,
+    probe: bool = False,
 ) -> dict:
     """ListenBrainz similar recordings for one stored track.
 
@@ -545,6 +546,11 @@ async def track_similar(
     an explicit `algorithm` the datasets are tried in order until one knows the
     seed, and a seed none of them knows is rescued through another recording of
     the same song; the response names whichever algorithm answered.
+
+    `probe=1` answers only "is there anything?" for the dashboard's title icon:
+    it checks the datasets and skips the same-song rescue (a MusicBrainz search
+    plus up to `RESCUE_CANDIDATES` recordings x four datasets). The full walk
+    runs when the dialog is opened, reusing the probe's cached dataset answers.
     """
 
     if algorithm is not None and algorithm not in listenbrainz.SIMILAR_ALGORITHMS:
@@ -560,7 +566,10 @@ async def track_similar(
     limit = max(1, min(limit, SIMILAR_LIMIT_MAX))
     try:
         rows = await listenbrainz.similar_recordings(
-            mbid, algorithm=algorithm, limit=limit
+            mbid,
+            algorithm=algorithm,
+            limit=1 if probe else limit,
+            rescue=not probe,
         )
     except listenbrainz.ListenBrainzError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from None

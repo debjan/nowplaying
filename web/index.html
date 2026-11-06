@@ -425,18 +425,18 @@
                 renderFeedback(data);
             }
 
-            // One ListenBrainz probe per track change (not a poll): `limit=1` is
-            // enough to learn whether the Labs datasets (or a rescued same-song
-            // seed) have similar recordings for this track, and it warms the
-            // server cache so opening the dialog is instant. A track no dataset
-            // knows costs a chain walk plus the rescue, so the icon can pop in a
-            // few seconds late; `similarCheckSeq` drops answers for a replaced
-            // track.
+            // One ListenBrainz probe per track change (not a poll): `probe=1`
+            // checks the Labs datasets only and skips the same-song rescue, so
+            // an obscure track costs four dataset lookups instead of a
+            // MusicBrainz search plus up to 48 more. It also warms the server
+            // cache, so opening the dialog only has to run the rescue (when the
+            // probe found nothing). `similarCheckSeq` drops answers for a
+            // replaced track.
             async function checkSimilar(trackId) {
                 const seq = ++similarCheckSeq;
                 let tracks;
                 try {
-                    const res = await fetch(`/api/track/${trackId}/similar?limit=1`);
+                    const res = await fetch(`/api/track/${trackId}/similar?limit=1&probe=1`);
                     if (!res.ok) return; // no MBID / API down: stay plain
                     const body = await res.json();
                     tracks = body && Array.isArray(body.Tracks) ? body.Tracks : [];
