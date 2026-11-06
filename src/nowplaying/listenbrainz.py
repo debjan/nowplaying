@@ -24,7 +24,7 @@ import time
 from collections import OrderedDict
 from typing import Any
 
-import httpx
+import httpx2 as httpx
 
 from nowplaying import config
 

@@ -17,7 +17,7 @@ from io import BytesIO
 from typing import TypedDict
 from urllib.parse import unquote, urlsplit
 
-import httpx
+import httpx2 as httpx
 from loguru import logger
 from PIL import Image, ImageChops
 

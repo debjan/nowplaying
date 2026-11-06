@@ -12,7 +12,7 @@ dependencies = [
     "aiosqlite>=0.20.0",
     "curl-cffi>=0.17.0",
     "fastapi>=0.141.1",
-    "httpx>=0.28.1",
+    "httpx2>=2.16.0",
     "loguru>=0.7.3",
     "pillow>=12.3.0",
     "python-dotenv>=1.0.0",
@@ -32,7 +32,10 @@ windows = [
 ]
 
 [dependency-groups]
-dev = ["pytest>=8"]
+dev = [
+    "coverage>=7.17.2",
+    "pytest>=8",
+]
 
 [project.scripts]
 nowplaying = "nowplaying.app:main"
