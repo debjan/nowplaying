@@ -3,6 +3,7 @@
 import asyncio
 import sqlite3
 import time
+from collections import deque
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from datetime import UTC, datetime
@@ -616,6 +617,7 @@ def current_position(conn: sqlite3.Connection) -> int:
 
 _conns: dict[str, aiosqlite.Connection] = {}
 _conn_lock = asyncio.Lock()
+_retired_conns: deque[aiosqlite.Connection] = deque(maxlen=8)
 
 _T = TypeVar('_T')
 
@@ -664,13 +666,17 @@ async def _adb(db_path: str) -> aiosqlite.Connection:
 
 
 async def _invalidate(db_path: str) -> None:
-    """Drop the cached connection so the next call reconnects."""
+    """Drop the cached connection so the next call reconnects.
+
+    The dropped connection is retired, not closed: another task may be
+    mid-query on this shared connection, and closing under it fails that
+    request too. `aclose_all()` closes retired connections at shutdown.
+    """
 
     async with _conn_lock:
         conn = _conns.pop(db_path, None)
-    if conn is not None:
-        with suppress(Exception):
-            await conn.close()
+        if conn is not None:
+            _retired_conns.append(conn)
 
 
 async def _acall(
@@ -781,11 +787,12 @@ async def aset_feedback(db_path: str, track_id: int, score: int) -> None:
 
 
 async def aclose_all() -> None:
-    """Close every cached connection; called at app shutdown."""
+    """Close every cached and retired connection; called at app shutdown."""
 
     async with _conn_lock:
-        conns = list(_conns.values())
+        conns = [*_conns.values(), *_retired_conns]
         _conns.clear()
+        _retired_conns.clear()
     for conn in conns:
         with suppress(Exception):
             await conn.close()
