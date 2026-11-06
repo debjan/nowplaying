@@ -835,14 +835,6 @@ async def feedback(score: int) -> dict:
     return _payload(updated or current)
 
 
-@app.get('/api/player/status')
-async def player_status() -> dict:
-    status = await _player_status()
-    if status is None:
-        raise HTTPException(status_code=404, detail='No active MPRIS player found') from None
-    return {'status': status}
-
-
 @app.get('/api/player/position')
 async def player_position() -> dict:
     """Return the D-Bus-polled playback position in ms (see monitor poll loops)."""

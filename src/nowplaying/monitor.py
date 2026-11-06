@@ -29,7 +29,6 @@ except ImportError:
     _curl_cffi = None
 
 COVER_FILE = config.COVER_FILE
-COVER_URL = config.COVER_URL
 
 _DEFAULTS = {
     'Artist': 'Unknown Artist',
@@ -100,12 +99,6 @@ logger.remove()
 logger.add(sys.stderr, level='WARNING')
 if config.DEBUG:
     logger.add(config.DEBUG_LOG, level='DEBUG', rotation='50 MB')
-
-
-def cover_url(url: str) -> str:
-    """Served URL for a cover thumbnail: COVER_URL with a version query param."""
-
-    return config.cover_url(url)
 
 
 def detect_side_borders(img: Image.Image, tolerance=50) -> dict:
@@ -194,14 +187,17 @@ def auto_crop(img: Image.Image) -> Image.Image:
     return img
 
 
-def download_cover(url: str, trim: bool = True) -> str | None:
-    """Download a thumbnail into COVER_FILE; optionally trim black borders."""
+def download_cover(url: str, trim: bool = True) -> bool:
+    """Download a thumbnail into COVER_FILE; optionally trim black borders.
+
+    Returns True once the file is in place, False when the art was skipped.
+    """
     try:
         resp = _HTTP.get(url)
         resp.raise_for_status()
         if len(resp.content) > _MAX_COVER_BYTES:
             logger.warning('[cover] image too large; skipping art')
-            return None
+            return False
         img = Image.open(BytesIO(resp.content))
         if trim:
             img = auto_crop(img)
@@ -217,8 +213,8 @@ def download_cover(url: str, trim: bool = True) -> str | None:
                 os.remove(tmp)
     except Exception as e:
         logger.error(f'[Error] could not save album art: {e}')
-        return None
-    return cover_url(url)
+        return False
+    return True
 
 
 def yt_dlp(artist: str, album: str, title: str) -> str | None:
@@ -738,7 +734,7 @@ class TrackMonitor:
         key = (url, artist, key_album)
         if key != self._last_cover_key:
             logger.debug(f'[cover] downloading new art: {url}')
-            if download_cover(url, trim=url.startswith('https://img.youtube')) is None:
+            if not download_cover(url, trim=url.startswith('https://img.youtube')):
                 logger.debug('[cover] download failed; skipping art')
                 return None, release_group_id
             self._last_cover_key = key

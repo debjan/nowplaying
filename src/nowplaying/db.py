@@ -536,11 +536,6 @@ def set_duration(conn: sqlite3.Connection, track_id: int, duration_ms: int) -> N
     conn.commit()
 
 
-def latest_history_id(conn: sqlite3.Connection) -> int | None:
-    row = conn.execute('SELECT MAX(id) FROM history').fetchone()
-    return row[0] if row and row[0] is not None else None
-
-
 def latest_history(conn: sqlite3.Connection) -> tuple[int, int] | None:
     """Return `(history id, track_id)` of the newest history row, or `None`."""
 
