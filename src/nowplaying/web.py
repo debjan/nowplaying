@@ -654,6 +654,12 @@ async def _broadcaster() -> None:
     last_status: object = _UNSET
     status_ts = 0.0
     while True:
+        if not _subscribers:
+            # No browser is connected: query nothing and spawn no `playerctl`.
+            # A new client gets the cached snapshots on connect and the next
+            # iteration refreshes them, so idle time costs one wake-up a second.
+            await asyncio.sleep(1.0)
+            continue
         now = time.monotonic()
         try:
             token = await db.alatest_change_token(config.DB_PATH)
