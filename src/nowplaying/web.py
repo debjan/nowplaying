@@ -20,7 +20,6 @@ import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import (
     FileResponse,
-    HTMLResponse,
     PlainTextResponse,
     StreamingResponse,
 )
@@ -58,16 +57,22 @@ else:
 # average color (see `_adaptive_palette`) instead of a static CSS file.
 ADAPTIVE_THEMES = frozenset({'adaptive-light.css', 'adaptive-dark.css'})
 
+
+def _valid_theme(name: str) -> bool:
+    """Whether `name` is an adaptive theme or a static CSS file in web/themes."""
+    stripped = name.strip().removesuffix('.css')
+    if stripped in {n.removesuffix('.css') for n in ADAPTIVE_THEMES}:
+        return True
+    return (
+        re.fullmatch(r'[a-z0-9-]+', stripped) is not None
+        and (THEMES_DIR / f'{stripped}.css').is_file()
+    )
+
+
 THEME = ''
 if config.THEME:
-    if (
-        config.THEME in {name.removesuffix('.css') for name in ADAPTIVE_THEMES}
-        or (
-            re.fullmatch(r'[a-z0-9-]+', config.THEME) is not None
-            and (THEMES_DIR / f'{config.THEME}.css').is_file()
-        )
-    ):
-        THEME = config.THEME
+    if _valid_theme(config.THEME):
+        THEME = config.THEME.strip().removesuffix('.css')
     else:
         logger.warning(f'[web] unknown THEME {config.THEME!r}; using the adaptive theme')
 
@@ -284,8 +289,27 @@ def _not_modified(request: Request, etag: str) -> bool:
     return request.headers.get('if-none-match') == etag
 
 
-def _not_modified_response(etag: str) -> Response:
-    return Response(status_code=304, headers={'ETag': etag, 'Cache-Control': 'no-cache'})
+def _cached_response(
+    request: Request,
+    loaded: tuple[str, bytes] | None,
+    *,
+    media_type: str,
+    cache_control: str,
+    missing: str = 'Not found',
+) -> Response:
+    """Serve one cached asset: 404 when missing, 304 on a matching ETag.
+
+    Every static route funnels through here, so the caching contract is declared
+    once per response and a 304 carries the same headers as the 200.
+    """
+
+    if loaded is None:
+        return PlainTextResponse(missing, status_code=404)
+    etag, content = loaded
+    headers = {'Cache-Control': cache_control, 'ETag': etag}
+    if _not_modified(request, etag):
+        return Response(status_code=304, headers=headers)
+    return Response(content=content, media_type=media_type, headers=headers)
 
 
 async def require_trusted(request: Request) -> None:
@@ -372,63 +396,49 @@ async def read_track() -> dict | None:
 @app.get('/')
 async def index(request: Request) -> Response:
     loaded = await _load_asset(INDEX)
-    if loaded is None:
-        return HTMLResponse('<h1>Home page not found</h1>', status_code=404)
-    etag, content = loaded
-    etag, content = _themed_index(etag, content)
-    if _not_modified(request, etag):
-        return _not_modified_response(etag)
-    return Response(
-        content=content,
+    if loaded is not None:
+        loaded = _themed_index(*loaded)
+    return _cached_response(
+        request,
+        loaded,
         media_type='text/html',
-        headers={'Cache-Control': 'no-cache', 'ETag': etag},
+        cache_control='no-cache',
+        missing='Home page not found',
     )
 
 
 @app.get('/style.css')
 async def css(request: Request) -> Response:
-    loaded = await _load_asset(CSS)
-    if loaded is None:
-        return Response('/* stylesheet not found */', status_code=404, media_type='text/css')
-    etag, content = loaded
-    if _not_modified(request, etag):
-        return _not_modified_response(etag)
-    return Response(
-        content=content,
+    return _cached_response(
+        request,
+        await _load_asset(CSS),
         media_type='text/css',
-        headers={'Cache-Control': 'no-cache', 'ETag': etag},
+        cache_control='no-cache',
+        missing='/* stylesheet not found */',
     )
 
 
 @app.get('/manifest.webmanifest')
 async def web_manifest(request: Request) -> Response:
     """Serve the PWA web app manifest."""
-    loaded = await _load_asset(MANIFEST)
-    if loaded is None:
-        return Response(status_code=404, content='Manifest not found')
-    etag, content = loaded
-    if _not_modified(request, etag):
-        return _not_modified_response(etag)
-    return Response(
-        content=content,
+    return _cached_response(
+        request,
+        await _load_asset(MANIFEST),
         media_type='application/manifest+json',
-        headers={'Cache-Control': 'public, max-age=3600', 'ETag': etag},
+        cache_control='public, max-age=3600',
+        missing='Manifest not found',
     )
 
 
 @app.get('/sw.js')
 async def service_worker(request: Request) -> Response:
     """Serve the PWA service worker; no-cache so a new worker deploys at once."""
-    loaded = await _load_asset(SW)
-    if loaded is None:
-        return Response(status_code=404, content='Service worker not found')
-    etag, content = loaded
-    if _not_modified(request, etag):
-        return _not_modified_response(etag)
-    return Response(
-        content=content,
+    return _cached_response(
+        request,
+        await _load_asset(SW),
         media_type='application/javascript',
-        headers={'Cache-Control': 'no-cache', 'ETag': etag},
+        cache_control='no-cache',
+        missing='Service worker not found',
     )
 
 
@@ -436,34 +446,25 @@ async def service_worker(request: Request) -> Response:
 async def icon(size: int, request: Request) -> Response:
     """Serve a PWA install icon (192/512 - keys of ICON_FILES)."""
     filename = ICON_FILES.get(size)
-    if filename is None:
-        return Response(status_code=404, content='Icon not found')
-    loaded = await _load_asset(PWA_DIR / filename)
-    if loaded is None:
-        return Response(status_code=404, content='Icon not found')
-    etag, content = loaded
-    if _not_modified(request, etag):
-        return _not_modified_response(etag)
-    return Response(
-        content=content,
+    loaded = await _load_asset(PWA_DIR / filename) if filename else None
+    return _cached_response(
+        request,
+        loaded,
         media_type='image/png',
-        headers={'Cache-Control': 'public, max-age=86400', 'ETag': etag},
+        cache_control='public, max-age=86400',
+        missing='Icon not found',
     )
 
 
 @app.get('/screenshot.png')
 async def screenshot(request: Request) -> Response:
     """Serve the manifest screenshot (narrow install sheet preview)."""
-    loaded = await _load_asset(SCREENSHOT)
-    if loaded is None:
-        return Response(status_code=404, content='Screenshot not found')
-    etag, content = loaded
-    if _not_modified(request, etag):
-        return _not_modified_response(etag)
-    return Response(
-        content=content,
+    return _cached_response(
+        request,
+        await _load_asset(SCREENSHOT),
         media_type='image/png',
-        headers={'Cache-Control': 'public, max-age=86400', 'ETag': etag},
+        cache_control='public, max-age=86400',
+        missing='Screenshot not found',
     )
 
 
@@ -481,15 +482,12 @@ async def theme(filename: str, request: Request) -> Response:
         if filename in ADAPTIVE_THEMES
         else await _load_asset(THEMES_DIR / filename)
     )
-    if loaded is None:
-        return Response('/* theme not found */', status_code=404, media_type='text/css')
-    etag, content = loaded
-    if _not_modified(request, etag):
-        return _not_modified_response(etag)
-    return Response(
-        content=content,
+    return _cached_response(
+        request,
+        loaded,
         media_type='text/css',
-        headers={'Cache-Control': 'no-cache', 'ETag': etag},
+        cache_control='no-cache',
+        missing='/* theme not found */',
     )
 
 
@@ -1011,17 +1009,6 @@ SETTING_FLAGS = ('AUTOSKIP', 'LISTENBRAINZ_SUBMIT')
 SETTING_KEYS = frozenset({*SETTING_FLAGS, 'THEME'})
 
 ENV_PATH = ROOT_DIR / '.env'
-
-
-def _valid_theme(name: str) -> bool:
-    """Whether `name` is an adaptive theme or a static CSS file in web/themes."""
-    stripped = name.strip().removesuffix('.css')
-    if stripped in {n.removesuffix('.css') for n in ADAPTIVE_THEMES}:
-        return True
-    return (
-        re.fullmatch(r'[a-z0-9-]+', stripped) is not None
-        and (THEMES_DIR / f'{stripped}.css').is_file()
-    )
 
 
 def _list_theme_names() -> list[str]:
