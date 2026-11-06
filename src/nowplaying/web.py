@@ -2,10 +2,12 @@ import asyncio
 import colorsys
 import hashlib
 import json
+import os
 import re
 import secrets
 import shutil
 import sqlite3
+import tempfile
 import time
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager, suppress
@@ -1040,7 +1042,9 @@ def _persist_env(pairs: list[tuple[str, str]]) -> None:
     """Write `KEY=value` pairs into the project-root `.env` - the ground truth.
 
     Existing assignments are replaced in place, new keys are appended; comments
-    and unrelated keys are left untouched.
+    and unrelated keys are left untouched. The file is swapped atomically
+    (temp file + `os.replace`) so the monitor's 5s poll never reads a
+    truncated file and briefly falls back to the default settings.
     """
     text = ''
     if ENV_PATH.exists():
@@ -1054,7 +1058,14 @@ def _persist_env(pairs: list[tuple[str, str]]) -> None:
         else:
             text = f'{key}={value}\n'
     ENV_PATH.parent.mkdir(parents=True, exist_ok=True)
-    ENV_PATH.write_text(text, encoding='utf-8')
+    fd, tmp = tempfile.mkstemp(dir=ENV_PATH.parent, suffix='.tmp')
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            f.write(text)
+        os.replace(tmp, ENV_PATH)
+    finally:
+        with suppress(OSError):
+            os.remove(tmp)
 
 
 def _settings_payload() -> dict[str, object]:
