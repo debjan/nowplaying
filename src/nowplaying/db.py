@@ -125,30 +125,6 @@ def _ensure_columns(conn: sqlite3.Connection) -> None:
     _localize_history(conn)
 
 
-async def _ensure_columns_async(conn: aiosqlite.Connection) -> None:
-    """Async twin of `_ensure_columns` for the web server's connections."""
-
-    for table, columns in _EXTRA_COLUMNS.items():
-        cur = await conn.execute(f'PRAGMA table_info({table})')
-        existing = {row[1] for row in await cur.fetchall()}
-        for name, ddl in columns.items():
-            if name not in existing:
-                await conn.execute(f'ALTER TABLE {table} ADD COLUMN {name} {ddl}')
-
-    for table, columns in _LEGACY_COLUMNS.items():
-        cur = await conn.execute(f'PRAGMA table_info({table})')
-        existing = {row[1] for row in await cur.fetchall()}
-        for name in columns:
-            if name in existing:
-                with suppress(sqlite3.OperationalError):
-                    await conn.execute(f'ALTER TABLE {table} DROP COLUMN {name}')
-
-    for table in _LEGACY_TABLES:
-        await conn.execute(f'DROP TABLE IF EXISTS {table}')
-
-    await _localize_history_async(conn)
-
-
 _HISTORY_LOCAL_VERSION = 1
 
 
@@ -194,35 +170,6 @@ def _localize_history(conn: sqlite3.Connection) -> None:
         raise
 
 
-async def _localize_history_async(conn: aiosqlite.Connection) -> None:
-    """Async twin of `_localize_history`."""
-
-    cur = await conn.execute('PRAGMA user_version')
-    row = await cur.fetchone()
-    if row and row[0] >= _HISTORY_LOCAL_VERSION:
-        return
-    await conn.execute('BEGIN IMMEDIATE')
-    try:
-        cur = await conn.execute('PRAGMA user_version')
-        row = await cur.fetchone()
-        if row and row[0] >= _HISTORY_LOCAL_VERSION:
-            await conn.rollback()
-            return
-        cur = await conn.execute(
-            'SELECT id, timestamp FROM history WHERE timestamp IS NOT NULL'
-        )
-        rows = await cur.fetchall()
-        await conn.executemany(
-            'UPDATE history SET timestamp = ? WHERE id = ?',
-            [(_as_local(stamp), row_id) for row_id, stamp in rows],
-        )
-        await conn.execute(f'PRAGMA user_version = {_HISTORY_LOCAL_VERSION}')
-        await conn.commit()
-    except BaseException:
-        await conn.rollback()
-        raise
-
-
 def _prepare(conn: sqlite3.Connection, attempts: int = 15) -> None:
     """Apply the baseline schema and ensure all columns exist."""
 
@@ -240,22 +187,18 @@ def _prepare(conn: sqlite3.Connection, attempts: int = 15) -> None:
             time.sleep(0.1 * (attempt + 1))
 
 
-async def _prepare_async(
-    conn: aiosqlite.Connection, attempts: int = 15
-) -> None:
-    """Async twin of `_prepare` for the web server's connections."""
+def _prepare_path(path: str, attempts: int = 15) -> None:
+    """Run `_prepare` against `path` on its own short-lived connection.
 
-    for attempt in range(attempts):
-        try:
-            await conn.execute('PRAGMA journal_mode = WAL')
-            await conn.execute('PRAGMA synchronous = NORMAL')
-            await conn.executescript(SCHEMA)
-            await _ensure_columns_async(conn)
-            return
-        except sqlite3.OperationalError as exc:
-            if 'locked' not in str(exc).lower() or attempt == attempts - 1:
-                raise
-            await asyncio.sleep(0.1 * (attempt + 1))
+    Blocking by design: the async layer calls this via `asyncio.to_thread`, so
+    both processes evolve the schema through exactly one implementation.
+    """
+
+    conn = sqlite3.connect(path, timeout=10, check_same_thread=False)
+    try:
+        _prepare(conn, attempts)
+    finally:
+        conn.close()
 
 
 def _normalize(s: str) -> str:
@@ -654,9 +597,14 @@ async def _adb(db_path: str) -> aiosqlite.Connection:
     async with _conn_lock:
         if db_path in _conns:
             return _conns[db_path]
+        # Evolve the schema with the single sync implementation, off the event
+        # loop, so the web server and the monitor can never build divergent
+        # databases from the same file.
+        await asyncio.to_thread(_prepare_path, db_path)
         fresh = await aiosqlite.connect(db_path, timeout=10)
         try:
-            await _prepare_async(fresh)
+            await fresh.execute('PRAGMA foreign_keys = ON')
+            await fresh.execute('PRAGMA synchronous = NORMAL')
         except BaseException:
             with suppress(Exception):
                 await fresh.close()
