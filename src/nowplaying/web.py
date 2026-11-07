@@ -33,6 +33,7 @@ ROOT_DIR = Path(__file__).resolve().parent.parent.parent
 WEB_DIR = ROOT_DIR / 'web'
 INDEX = WEB_DIR / 'index.html'
 CSS = WEB_DIR / 'style.css'
+JS_DIR = WEB_DIR / 'js'
 COVER_SVG = WEB_DIR / 'cover.svg'
 THEMES_DIR = WEB_DIR / 'themes'
 PWA_DIR = WEB_DIR / 'PWA'
@@ -446,6 +447,25 @@ async def css(request: Request) -> Response:
         media_type='text/css',
         cache_control='no-cache',
         missing='/* stylesheet not found */',
+    )
+
+
+@app.get('/js/{filename}')
+async def script(filename: str, request: Request) -> Response:
+    """Serve a dashboard script from `web/js` (flat names only, never cached)."""
+    if (
+        Path(filename).name != filename
+        or not filename.endswith('.js')
+        or filename.startswith('.')
+        or '\\' in filename
+    ):
+        raise HTTPException(status_code=400, detail='Invalid script filename')
+    return _cached_response(
+        request,
+        await _load_asset(JS_DIR / filename),
+        media_type='application/javascript',
+        cache_control='no-cache',
+        missing='/* script not found */',
     )
 
 
