@@ -1,6 +1,33 @@
-// The live track stream: renders the SSE payload into the card (artist /
-// album / title rows, album art, feedback, OS media session) and handles
-// playback status events. Track data is server-pushed; nothing here polls.
+// The live track stream: renders the SSE payload into the card (artist / album
+// / title rows, album art, feedback, OS media session) and handles playback
+// status events. Track data is server-pushed; nothing here polls.
+
+import { source } from './core.js';
+import { state } from './state.js';
+import { fetchPosition } from './progress.js';
+import {
+    playBtn,
+    setMediaSessionState,
+    updateMediaSession,
+    clearMediaSession,
+} from './playback.js';
+import { renderFeedback } from './feedback.js';
+import { openReview, openSimilar } from './dialogs.js';
+import { applyCoverTheme } from './themes.js';
+
+// Identity of the track currently on screen (`TrackId`) and a render key for
+// the rows, so an SSE reconnect that re-emits the same track doesn't rebuild
+// the DOM. `lastRenderKey === null` forces the next payload to render.
+let lastTrackId = null;
+let lastRenderKey = null;
+// Current track's MusicBrainz recording id (null when unresolved).
+let currentMbid = null;
+// Whether ListenBrainz has similar recordings for the current track (the title
+// row only becomes clickable once it does), which track was probed, and a
+// counter that drops answers for a track that has since been replaced.
+let similarActive = false;
+let similarProbedId = null;
+let similarCheckSeq = 0;
 
 window.addEventListener('DOMContentLoaded', () => {
     const trackEl = document.getElementById('track');
@@ -32,7 +59,7 @@ window.addEventListener('DOMContentLoaded', () => {
         }
         if (!data || data.error) {
             lastRenderKey = null;
-            lastTrackData = null;
+            state.lastTrackData = null;
             similarActive = false;
             similarProbedId = null;
             similarCheckSeq += 1; // drop an in-flight probe
@@ -53,17 +80,17 @@ window.addEventListener('DOMContentLoaded', () => {
         const id = data.TrackId;
         if (id !== lastTrackId) {
             if (lastTrackId === null) {
-                progressActive = false;
+                state.progressActive = false;
                 // Fresh page load: SSE only replays a position event if one
                 // was recently published, so pull the stored position
                 // directly instead of starting at 0.
                 fetchPosition();
             } else {
-                progressActive = true;
-                positionMs = 0;
-                lastTickTs = Date.now();
+                state.progressActive = true;
+                state.positionMs = 0;
+                state.lastTickTs = Date.now();
             }
-            positionSynced = false;
+            state.positionSynced = false;
             lastTrackId = id;
             // Unknown until the probes answer: both icons need real
             // ListenBrainz rows before they show up.
@@ -75,22 +102,18 @@ window.addEventListener('DOMContentLoaded', () => {
             similarProbedId = id;
             void checkSimilar(id);
         }
-        lastTrackData = data;
-        durationMs = Number(data.Duration) || 0;
+        state.lastTrackData = data;
+        state.durationMs = Number(data.Duration) || 0;
         renderFeedback(data);
         updateMediaSession(data);
         const art = data['Album Art'] || 'cover.svg';
         if (!artEl.src.endsWith(art)) {
             artEl.src = art;
         }
-        // Album art changed (or absent): re-apply an adaptive theme so
-        // its palette follows the cover shown for the current track —
-        // the server serves the neutral fallback for a no-art track.
+        // Album art changed (or absent): re-apply an adaptive theme so its
+        // palette follows the cover shown for the current track.
         const artVersion = data['Album Art']?.split('?v=')[1] || null;
-        if (ADAPTIVE_THEMES.has(currentTheme) && artVersion !== lastArtVersion) {
-            lastArtVersion = artVersion;
-            applyTheme(currentTheme, artVersion);
-        }
+        applyCoverTheme(artVersion);
         // Rebuild the track rows only when the rendered content changes;
         // SSE re-emits the current track on every reconnect.
         const renderKey = JSON.stringify([
@@ -98,12 +121,12 @@ window.addEventListener('DOMContentLoaded', () => {
             data.Loved, data.Hated, data.Review, data.Biography, data.MBID,
         ]);
         if (renderKey === lastRenderKey) {
-            playerctlAvailable = data.PlayerctlAvailable;
+            state.playerctlAvailable = data.PlayerctlAvailable;
             return;
         }
         lastRenderKey = renderKey;
         renderRows(data);
-        playerctlAvailable = data.PlayerctlAvailable;
+        state.playerctlAvailable = data.PlayerctlAvailable;
     };
 
     // Render the Artist / Album / Title rows for `data`. The ListenBrainz
@@ -197,8 +220,8 @@ window.addEventListener('DOMContentLoaded', () => {
 
     // Re-render the current track's rows after a probe answered.
     function renderCurrentRows(trackId) {
-        if (lastTrackData && lastTrackData.TrackId === trackId) {
-            renderRows(lastTrackData);
+        if (state.lastTrackData && state.lastTrackData.TrackId === trackId) {
+            renderRows(state.lastTrackData);
         }
     }
 
@@ -211,7 +234,7 @@ window.addEventListener('DOMContentLoaded', () => {
         }
         const active = typeof data.Status === 'string';
         playBtn.classList.toggle('playing', data.Status === 'Playing');
-        playerctlAvailable = active;
+        state.playerctlAvailable = active;
         controls.hidden = !active;
         setMediaSessionState(
             data.Status === 'Playing' ? 'playing' : active ? 'paused' : 'none'

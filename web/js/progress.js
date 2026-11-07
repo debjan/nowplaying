@@ -1,6 +1,16 @@
-// Progress bar and transport controls. `Duration` arrives over SSE; the
-// position is advanced locally and re-seeded from the server playback row
-// (the only client poll) every 3s and from `position` SSE events.
+// Progress bar and position reconciliation.
+//
+// `Duration` arrives over SSE (stream.js); the position is advanced locally and
+// re-seeded from the server's `playback` row every 3s - the one allowed client
+// poll - and from `position` SSE events, which fire on seeks.
+
+import { source } from './core.js';
+import { state } from './state.js';
+import { playBtn, syncMediaSessionPosition } from './playback.js';
+
+const progressBar = document.getElementById('progress');
+const progressFill = document.getElementById('progress-fill');
+const progressTip = document.getElementById('progress-tip');
 
 function formatMs(ms) {
     const totalSec = Math.max(0, Math.floor(ms / 1000));
@@ -10,72 +20,54 @@ function formatMs(ms) {
 }
 
 function updateProgressTip() {
-    const label = durationMs ? `${formatMs(positionMs)} / ${formatMs(durationMs)}` : '';
+    const label = state.durationMs
+        ? `${formatMs(state.positionMs)} / ${formatMs(state.durationMs)}`
+        : '';
     progressTip.textContent = label;
 }
 
 function updateProgress() {
-    if (!durationMs || !playerctlAvailable || !positionSynced) {
+    if (!state.durationMs || !state.playerctlAvailable || !state.positionSynced) {
         progressBar.hidden = true;
         return;
     }
     progressBar.hidden = false;
     const now = Date.now();
-    if (progressActive && playBtn.classList.contains('playing')) {
-        positionMs += now - lastTickTs;
+    if (state.progressActive && playBtn.classList.contains('playing')) {
+        state.positionMs += now - state.lastTickTs;
     }
-    lastTickTs = now;
-    if (positionMs >= durationMs) {
-        positionMs = durationMs;
-        progressActive = false;
+    state.lastTickTs = now;
+    if (state.positionMs >= state.durationMs) {
+        state.positionMs = state.durationMs;
+        state.progressActive = false;
     }
-    progressFill.style.width = (Math.min(1, positionMs / durationMs) * 100).toFixed(2) + '%';
+    const ratio = Math.min(1, state.positionMs / state.durationMs);
+    progressFill.style.width = (ratio * 100).toFixed(2) + '%';
     updateProgressTip();
     syncMediaSessionPosition();
 }
 
-async function fetchPosition() {
+// The stored position: opening the page mid-track shows the real position
+// instead of a false restart from 0.
+export async function fetchPosition() {
     try {
         const res = await fetch('/api/player/position');
         if (!res.ok) return;
         const data = await res.json();
         if (typeof data.Position !== 'number') return;
-        positionMs = data.Position;
-        lastTickTs = Date.now();
-        progressActive = true;
-        positionSynced = true;
+        state.positionMs = data.Position;
+        state.lastTickTs = Date.now();
+        state.progressActive = true;
+        state.positionSynced = true;
     } catch {
         // ignore; SSE position events remain the live source
     }
 }
 
-async function sendControl(action) {
-    if (action === 'play-pause') {
-        playBtn.classList.toggle('playing');
-        setMediaSessionState(
-            playBtn.classList.contains('playing') ? 'playing' : 'paused'
-        );
-    }
-    if (action === 'previous') {
-        positionMs = 0;
-        lastTickTs = Date.now();
-        progressActive = true;
-    }
-    try {
-        await fetch(`/api/player/${action}`, postInit());
-    } catch {
-        // ignore; playback state is reconciled by the next status event
-    }
-}
-
-document.querySelectorAll('.btn').forEach((btn) => {
-    btn.addEventListener('click', () => sendControl(btn.dataset.action));
-});
-
 setInterval(updateProgress, 1000);
 
-// Server-confirmed position (`playback` row): the truth the local
-// counter is re-seeded from on track change and after a seek.
+// Server-confirmed position (`playback` row): the truth the local counter is
+// re-seeded from after a seek / on track change.
 source.addEventListener('position', (event) => {
     let data;
     try {
@@ -86,8 +78,8 @@ source.addEventListener('position', (event) => {
     if (typeof data.Position !== 'number') {
         return;
     }
-    positionMs = data.Position;
-    lastTickTs = Date.now();
-    progressActive = true;
-    positionSynced = true;
+    state.positionMs = data.Position;
+    state.lastTickTs = Date.now();
+    state.progressActive = true;
+    state.positionSynced = true;
 });

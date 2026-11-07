@@ -2,23 +2,24 @@
 // navigations network-first (falling back to the cached shell offline) and
 // static assets stale-while-revalidate. Live /api/ data is never cached.
 
-const VERSION = 'v11';
+const VERSION = 'v12';
 const SHELL_CACHE = `shell-${VERSION}`;
 
 const SHELL_URLS = [
     '/',
     '/style.css',
     '/js/theme-boot.js',
+    '/js/app.js',
     '/js/state.js',
     '/js/core.js',
-    '/js/stream.js',
-    '/js/themes.js',
+    '/js/playback.js',
     '/js/progress.js',
     '/js/feedback.js',
     '/js/sleep.js',
     '/js/settings.js',
-    '/js/media-session.js',
+    '/js/stream.js',
     '/js/dialogs.js',
+    '/js/themes.js',
     '/favicon',
     '/cover.svg',
     '/manifest.webmanifest',

@@ -56,7 +56,7 @@ flowchart LR
 ## Quick start
 
 ```bash
-cp .env.example .env   # optional overrides only
+cp .env.example .env     # optional overrides only
 ```
 
 ### Linux (Raspberry Pi)

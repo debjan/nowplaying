@@ -1,6 +1,22 @@
-// App plumbing: the trusted-POST helper (every state-changing request
-// carries the token injected into <meta>), the SSE EventSource shared by
-// every module, and the PWA service-worker registration.
+// App plumbing: the trusted-POST helper (every state-changing request carries
+// the token injected into <meta>), the SSE EventSource shared by every module,
+// and the PWA service-worker registration.
+
+export const source = new EventSource('/api/track/stream');
+
+const NOWPLAYING_TOKEN =
+    document.querySelector('meta[name="nowplaying-token"]')?.content || '';
+
+export function postInit(options = {}) {
+    const init = { method: 'POST', ...options };
+    if (NOWPLAYING_TOKEN) {
+        init.headers = {
+            ...(options.headers || {}),
+            'X-Nowplaying-Token': NOWPLAYING_TOKEN,
+        };
+    }
+    return init;
+}
 
 if ('serviceWorker' in navigator) {
     let hadController = Boolean(navigator.serviceWorker.controller);
@@ -16,18 +32,4 @@ if ('serviceWorker' in navigator) {
             console.error('Service worker registration failed:', err);
         });
     });
-}
-const source = new EventSource('/api/track/stream');
-const NOWPLAYING_TOKEN =
-    document.querySelector('meta[name="nowplaying-token"]')?.content || '';
-
-function postInit(options = {}) {
-    const init = { method: 'POST', ...options };
-    if (NOWPLAYING_TOKEN) {
-        init.headers = {
-            ...(options.headers || {}),
-            'X-Nowplaying-Token': NOWPLAYING_TOKEN,
-        };
-    }
-    return init;
 }

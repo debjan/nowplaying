@@ -1,11 +1,11 @@
-// Sleep timer. The timer is server-owned (`POST /api/sleep/{mode}`) so it
-// keeps counting while the phone is asleep and survives a reload; this
-// side only renders the state pushed over SSE.
+// Sleep timer.
+//
+// The timer is server-owned (`POST /api/sleep/{mode}`) so it keeps counting
+// while the phone is asleep and survives a reload; this side only renders the
+// state pushed over SSE.
 
-// --- Sleep timer ------------------------------------------------------
-// The timer is server-owned (`POST /api/sleep/{mode}`) so it keeps
-// counting while the phone is asleep and survives a page reload; this
-// side only renders the state pushed over SSE.
+import { postInit, source } from './core.js';
+
 const sleepBtn = document.getElementById('sleep-btn');
 const sleepLabel = document.getElementById('sleep-label');
 const sleepMenu = document.getElementById('sleep-menu');
@@ -14,7 +14,7 @@ const sleepRadios = [...sleepMenu.querySelectorAll('input[name="sleep-mode"]')];
 let sleepMode = null;
 let sleepEndsAt = null;
 
-function closeSleepMenu() {
+export function closeSleepMenu() {
     sleepMenu.hidden = true;
     sleepBtn.setAttribute('aria-expanded', 'false');
 }
@@ -51,9 +51,9 @@ function renderSleep() {
     sleepBtn.title = `Sleep timer: ${formatSleepRemaining(remaining)}`;
 }
 
-function applySleepState(state) {
-    sleepMode = state && state.Mode ? state.Mode : null;
-    sleepEndsAt = state && typeof state.EndsAt === 'number' ? state.EndsAt : null;
+function applySleepState(timer) {
+    sleepMode = timer && timer.Mode ? timer.Mode : null;
+    sleepEndsAt = timer && typeof timer.EndsAt === 'number' ? timer.EndsAt : null;
     renderSleep();
 }
 
@@ -91,18 +91,13 @@ sleepMenu.addEventListener('change', (e) => {
 document.addEventListener('click', (e) => {
     if (!sleepBtn.closest('.picker').contains(e.target)) closeSleepMenu();
 });
-document.addEventListener('keydown', (e) => {
-    if (e.key !== 'Escape') return;
-    if (settingsPopup && !settingsPopup.hidden) closeSettings();
-    else closeSleepMenu();
-});
 
 renderSleep();
 
 setInterval(renderSleep, 1000);
 
-// Server-pushed sleep timer state: the countdown is derived from
-// `EndsAt` locally, so the stream only fires on arm / cancel / expiry.
+// Server-pushed sleep timer state: the countdown is derived from `EndsAt`
+// locally, so the stream only fires on arm / cancel / expiry.
 source.addEventListener('sleep', (event) => {
     let data;
     try {

@@ -56,3 +56,8 @@ window.addEventListener('pageshow', () => syncThemeColor(true));
 document.addEventListener('visibilitychange', () => {
     if (!document.hidden) syncThemeColor(true);
 });
+
+// The dashboard itself is an ES module graph (js/app.js), deferred and
+// module-scoped, so it cannot see this file's scope. Expose the one function it
+// needs (the runtime switcher in js/themes.js) as the single intentional global.
+window.syncThemeColor = syncThemeColor;

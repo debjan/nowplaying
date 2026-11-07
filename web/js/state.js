@@ -1,28 +1,23 @@
-// Shared mutable state for the dashboard scripts. Classic scripts all
-// share one global scope, so these bindings are readable/writable from
-// every other module (stream, progress, feedback, dialogs).
+// Shared mutable state for the dashboard modules.
+//
+// ES module imports are read-only *bindings* (an importer cannot rebind
+// `import { durationMs }`), so the state that several modules write lives in
+// one exported object: importers may read and assign its properties, but the
+// object itself is never replaced.
 
-const playBtn = document.querySelector('.btn-play');
-
-let durationMs = 0;
-let positionMs = 0;
-let lastTickTs = Date.now();
-let lastTrackId = null;
-let progressActive = false;
-let playerctlAvailable = false;
-let positionSynced = false;
-let lastRenderKey = null;
-// Current track's MusicBrainz recording id (null when unresolved);
-// `similarSeq` invalidates in-flight ListenBrainz dialog fetches.
-let currentMbid = null;
-let similarSeq = 0;
-// Whether ListenBrainz has similar recordings for the current track (the
-// title row only becomes clickable once it does) and the last payload it
-// was rendered from, so the probe can re-render the rows when it answers.
-let similarActive = false;
-let similarProbedId = null;
-let similarCheckSeq = 0;
-let lastTrackData = null;
-const progressBar = document.getElementById('progress');
-const progressFill = document.getElementById('progress-fill');
-const progressTip = document.getElementById('progress-tip');
+export const state = {
+    // Track duration from the SSE payload (ms, 0 when unknown) and the
+    // position the progress bar / OS scrubber advance between reconciliations.
+    durationMs: 0,
+    positionMs: 0,
+    lastTickTs: Date.now(),
+    // Whether the position counter is running (true while a track is shown),
+    // whether the server already confirmed a position, and whether a player
+    // backend is reachable (gates the transport controls and progress bar).
+    progressActive: false,
+    positionSynced: false,
+    playerctlAvailable: false,
+    // Latest track payload rendered by stream.js; feedback.js re-renders and
+    // records verdicts against it, so both must see the same object.
+    lastTrackData: null,
+};

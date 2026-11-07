@@ -64,12 +64,16 @@ const popupClose = document.getElementById('review-close');
 
 const SIMILAR_LIMIT = 12;
 
+// Invalidates an in-flight similar-tracks fetch when the popup is closed or
+// replaced by another one (stream.js has its own probe counter).
+let similarSeq = 0;
+
 function resetPopupMode() {
     popupCard.classList.remove('wide');
     popupBody.classList.remove('popup-table');
 }
 
-function openReview(review, title) {
+export function openReview(review, title) {
     similarSeq += 1; // drop any in-flight similar-tracks fetch
     resetPopupMode();
     popupTitle.textContent = title;
@@ -228,7 +232,7 @@ async function loadPopupTable({ label, url, field, noun, build, empty }) {
 
 // Similar recordings for the current track (seeded on its MusicBrainz
 // recording id; the server caches them for an hour).
-function openSimilar(trackId, label) {
+export function openSimilar(trackId, label) {
     if (!trackId) return;
     return loadPopupTable({
         label,

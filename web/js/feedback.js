@@ -1,12 +1,13 @@
-// Love / hate thumbs over the album art. A vote is stored in the local
-// `feedback` table and, with a ListenBrainz token, mirrored as feedback;
-// the SSE change token carries the score so every client re-renders.
+// Love / hate thumbs over the album art.
+//
+// A vote is stored in the local `feedback` table and, with a ListenBrainz
+// token, mirrored as feedback; the SSE change token carries the score so every
+// open client re-renders the filled variant (the local DB is the only source
+// of truth).
 
-// --- Love / hate ------------------------------------------------------
-// Two thumbs over the album art. A vote is stored in the local `feedback`
-// table and, with a ListenBrainz token, submitted as love/hate feedback.
-// The SSE change token includes the score, so every open client re-renders
-// the filled variant (the local DB is the only source of truth).
+import { postInit } from './core.js';
+import { state } from './state.js';
+
 const feedbackEl = document.getElementById('feedback');
 const thumbUp = feedbackEl.querySelector('.feedback-btn[data-score="1"]');
 const thumbDown = feedbackEl.querySelector('.feedback-btn[data-score="-1"]');
@@ -24,7 +25,7 @@ function renderThumb(btn, pressed, kind) {
     btn.setAttribute('aria-label', label);
 }
 
-function renderFeedback(data) {
+export function renderFeedback(data) {
     const active = Boolean(data && data.TrackId);
     feedbackEl.hidden = !active;
     if (!active) return;
@@ -33,40 +34,43 @@ function renderFeedback(data) {
 }
 
 async function sendFeedback(score) {
-    if (!lastTrackData || !lastTrackData.TrackId) return;
-    const trackId = lastTrackData.TrackId;
+    const current = state.lastTrackData;
+    if (!current || !current.TrackId) return;
+    const trackId = current.TrackId;
     const previous = {
-        Loved: Boolean(lastTrackData.Loved),
-        Hated: Boolean(lastTrackData.Hated),
+        Loved: Boolean(current.Loved),
+        Hated: Boolean(current.Hated),
     };
     // Pressing the thumb that is already filled withdraws the vote; the
     // server mirrors this, so keep the optimistic state in step.
     const withdrawing = (score === 1 && previous.Loved)
         || (score === -1 && previous.Hated);
-    lastTrackData = {
-        ...lastTrackData,
+    state.lastTrackData = {
+        ...current,
         Loved: withdrawing ? false : score === 1,
         Hated: withdrawing ? false : score === -1,
     };
-    renderFeedback(lastTrackData);
+    renderFeedback(state.lastTrackData);
     try {
         const res = await fetch(`/api/feedback/${score}`, postInit());
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
-        if (lastTrackData && data.TrackId === lastTrackData.TrackId) {
-            lastTrackData = {
-                ...lastTrackData,
+        const latest = state.lastTrackData;
+        if (latest && data.TrackId === latest.TrackId) {
+            state.lastTrackData = {
+                ...latest,
                 Loved: Boolean(data.Loved),
                 Hated: Boolean(data.Hated),
             };
-            renderFeedback(lastTrackData);
+            renderFeedback(state.lastTrackData);
         }
     } catch (err) {
         // Refused or offline: put the previous verdict back (unless the
         // stream already moved on to another track).
-        if (lastTrackData && lastTrackData.TrackId === trackId) {
-            lastTrackData = { ...lastTrackData, ...previous };
-            renderFeedback(lastTrackData);
+        const latest = state.lastTrackData;
+        if (latest && latest.TrackId === trackId) {
+            state.lastTrackData = { ...latest, ...previous };
+            renderFeedback(state.lastTrackData);
         }
         console.error('Failed to submit feedback:', err);
     }

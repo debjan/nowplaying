@@ -1,11 +1,11 @@
-// Quick settings modal: behaviour toggles (AUTOSKIP / LISTENBRAINZ_SUBMIT)
-// and the theme picker. Every change is persisted server-side to `.env`
-// (the ground truth) and applied to the running config.
+// Quick settings modal: behaviour toggles (AUTOSKIP / LISTENBRAINZ_SUBMIT) and
+// the theme picker. Every change is persisted server-side to `.env` - the
+// ground truth - and applied to the running config.
 
-// --- Settings modal ------------------------------------------------------
-// Quick toggles (behaviour flags) + theme selector. Every change goes to
-// the server (`POST /api/settings`), which persists it to the project-root
-// `.env` - the ground truth - and applies it to the running config.
+import { postInit } from './core.js';
+import { applyTheme, getCurrentTheme } from './themes.js';
+import { closeSleepMenu } from './sleep.js';
+
 const settingsBtn = document.getElementById('settings-btn');
 const settingsPopup = document.getElementById('settings-popup');
 const settingsClose = document.getElementById('settings-close');
@@ -37,7 +37,7 @@ function renderSettings() {
 }
 
 function renderThemeOptions() {
-    const current = (currentSettings && currentSettings.THEME) || currentTheme;
+    const current = (currentSettings && currentSettings.THEME) || getCurrentTheme();
     const names = [...new Set([current, ...settingsThemes])];
     settingsThemeSelect.replaceChildren();
     for (const name of names) {
@@ -106,7 +106,7 @@ async function setTheme(name) {
         // Hot-swap the sheet client-side; the server keeps the theme in .env.
         const meta = document.querySelector('meta[name="nowplaying-theme"]');
         if (meta) meta.content = name;
-        applyTheme(name, lastArtVersion);
+        applyTheme(name);
         renderThemeOptions();
     } catch (err) {
         console.error('Failed to set theme:', err);
@@ -148,3 +148,11 @@ for (const input of settingsSwitches) {
         });
     });
 }
+
+// One Escape handler for the two non-modal panels: the settings popup wins over
+// the sleep menu (dialogs.js closes its own modal popup separately).
+document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    if (!settingsPopup.hidden) closeSettings();
+    else closeSleepMenu();
+});

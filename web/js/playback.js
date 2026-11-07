@@ -1,12 +1,39 @@
-// Media Session API: publishes the track to the OS (lock screen, media
-// keys, the Windows SMTC overlay) and routes OS controls through the same
-// `sendControl()` the dashboard buttons use.
+// Playback: the transport buttons and the OS Media Session.
+//
+// `sendControl()` translates a dashboard click (or an OS media key, see below)
+// into a command for whichever player is active; the server is stateless on
+// this path, so nothing here touches the DB. The Media Session API publishes
+// the track to the OS (lock screen, media keys, Bluetooth headsets, the Windows
+// SMTC overlay) and routes its controls back through the same `sendControl()`.
 
-// --- Media Session API ----------------------------------------------
-// Publishes the track to the OS (lock screen, media keys, Bluetooth
-// headset buttons, the Windows SMTC overlay) and routes the OS controls
-// through the same `sendControl()` the dashboard buttons use, so a
-// media key press and a click are indistinguishable server-side.
+import { postInit } from './core.js';
+import { state } from './state.js';
+
+export const playBtn = document.querySelector('.btn-play');
+
+export async function sendControl(action) {
+    if (action === 'play-pause') {
+        playBtn.classList.toggle('playing');
+        setMediaSessionState(
+            playBtn.classList.contains('playing') ? 'playing' : 'paused'
+        );
+    }
+    if (action === 'previous') {
+        state.positionMs = 0;
+        state.lastTickTs = Date.now();
+        state.progressActive = true;
+    }
+    try {
+        await fetch(`/api/player/${action}`, postInit());
+    } catch {
+        // ignore; playback state is reconciled by the next status event
+    }
+}
+
+document.querySelectorAll('.btn').forEach((btn) => {
+    btn.addEventListener('click', () => sendControl(btn.dataset.action));
+});
+
 const mediaSession = 'mediaSession' in navigator ? navigator.mediaSession : null;
 // The silent keep-alive element (see `keepSessionAlive` further down).
 const sessionAudio = document.getElementById('session-audio');
@@ -28,14 +55,14 @@ function absoluteUrl(url) {
     }
 }
 
-function setMediaSessionState(state) {
+export function setMediaSessionState(playbackState) {
     if (!mediaSession) return;
     try {
-        mediaSession.playbackState = state;
+        mediaSession.playbackState = playbackState;
     } catch {
         // unsupported state value; the status event retries on change
     }
-    mediaSessionWanted = state === 'playing';
+    mediaSessionWanted = playbackState === 'playing';
     if (mediaSessionWanted) {
         // Real playback started: (re)open the OS session.
         keepSessionAlive();
@@ -46,7 +73,7 @@ function setMediaSessionState(state) {
     }
 }
 
-function updateMediaSession(data) {
+export function updateMediaSession(data) {
     if (!mediaSession || !data) return;
     const key = JSON.stringify([data.Title, data.Artist, data.Album, data['Album Art']]);
     if (key === mediaSessionKey) return;
@@ -64,7 +91,7 @@ function updateMediaSession(data) {
     }
 }
 
-function clearMediaSession() {
+export function clearMediaSession() {
     if (!mediaSession) return;
     mediaSessionKey = null;
     mediaSession.metadata = null;
@@ -78,12 +105,12 @@ function clearMediaSession() {
 
 // Feed the OS scrubber; the browser rejects a state without a positive
 // duration, so this only runs once a duration is known.
-function syncMediaSessionPosition() {
+export function syncMediaSessionPosition() {
     if (!mediaSession) return;
     try {
         mediaSession.setPositionState({
-            duration: durationMs / 1000,
-            position: Math.min(positionMs, durationMs) / 1000,
+            duration: state.durationMs / 1000,
+            position: Math.min(state.positionMs, state.durationMs) / 1000,
             playbackRate: 1,
         });
     } catch {
