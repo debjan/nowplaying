@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <meta name="theme-color" content="#1D2021">
     <meta name="nowplaying-theme" content="">
+    <meta name="nowplaying-token" content="">
     <meta name="description" content="Now Playing - live track metadata from any media app.">
     <link rel="manifest" href="/manifest.webmanifest">
     <link rel="icon" type="image/svg+xml" href="favicon">
@@ -255,6 +256,19 @@
             });
         }
         const source = new EventSource('/api/track/stream');
+        const NOWPLAYING_TOKEN =
+            document.querySelector('meta[name="nowplaying-token"]')?.content || '';
+
+        function postInit(options = {}) {
+            const init = { method: 'POST', ...options };
+            if (NOWPLAYING_TOKEN) {
+                init.headers = {
+                    ...(options.headers || {}),
+                    'X-Nowplaying-Token': NOWPLAYING_TOKEN,
+                };
+            }
+            return init;
+        }
         window.addEventListener('DOMContentLoaded', () => {
             const trackEl = document.getElementById('track');
             const artEl = document.getElementById('art');
@@ -611,7 +625,7 @@
                 progressActive = true;
             }
             try {
-                await fetch(`/api/player/${action}`, { method: 'POST' });
+                await fetch(`/api/player/${action}`, postInit());
             } catch {
                 // ignore; playback state is reconciled by the next status event
             }
@@ -669,7 +683,7 @@
             };
             renderFeedback(lastTrackData);
             try {
-                const res = await fetch(`/api/feedback/${score}`, { method: 'POST' });
+                const res = await fetch(`/api/feedback/${score}`, postInit());
                 if (!res.ok) throw new Error(`HTTP ${res.status}`);
                 const data = await res.json();
                 if (lastTrackData && data.TrackId === lastTrackData.TrackId) {
@@ -754,7 +768,7 @@
 
         async function setSleep(mode) {
             try {
-                const res = await fetch(`/api/sleep/${mode}`, { method: 'POST' });
+                const res = await fetch(`/api/sleep/${mode}`, postInit());
                 if (!res.ok) throw new Error(`HTTP ${res.status}`);
                 applySleepState(await res.json());
             } catch (err) {
@@ -871,11 +885,10 @@
 
         async function setSetting(key, value) {
             try {
-                const res = await fetch('/api/settings', {
-                    method: 'POST',
+                const res = await fetch('/api/settings', postInit({
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ [key]: value }),
-                });
+                }));
                 if (!res.ok) throw new Error(`HTTP ${res.status}`);
                 const data = await res.json();
                 currentSettings = data.Settings || currentSettings;
@@ -889,11 +902,10 @@
 
         async function setTheme(name) {
             try {
-                const res = await fetch('/api/settings', {
-                    method: 'POST',
+                const res = await fetch('/api/settings', postInit({
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ THEME: name }),
-                });
+                }));
                 if (!res.ok) throw new Error(`HTTP ${res.status}`);
                 const data = await res.json();
                 currentSettings = data.Settings || currentSettings;

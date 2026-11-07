@@ -13,6 +13,7 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import NamedTuple
+from urllib.parse import urlsplit
 
 import aiofiles
 import aiofiles.os
@@ -317,35 +318,65 @@ async def require_trusted(request: Request) -> None:
 
     Browsers label every request with `Sec-Fetch-Site`; a page on another
     origin can fire a simple cross-site form POST at us without a preflight,
-    so anything not `same-origin`/`none` is refused. Requests without the
-    header (older browsers, curl, scripts on the LAN) fall back to the
-    optional shared secret in `NOWPLAYING_TOKEN`; leaving it empty keeps a
-    fresh install working.
+    so `cross-site` is refused. `same-site` is accepted: it only means another
+    port or subdomain of the same host, which a third-party page cannot reach.
     """
 
     site = request.headers.get('sec-fetch-site')
+    reason = ''
     if site is not None:
-        if site not in ('same-origin', 'none'):
-            raise HTTPException(status_code=403, detail='Cross-site request blocked')
-        return
-    if not config.TOKEN:
-        return
-    supplied = request.headers.get('x-nowplaying-token', '')
-    if not secrets.compare_digest(supplied, config.TOKEN):
-        raise HTTPException(
-            status_code=403, detail='Missing or invalid X-Nowplaying-Token'
-        )
+        if site in ('same-origin', 'same-site', 'none'):
+            return
+        reason = f'Sec-Fetch-Site: {site}'
+    else:
+        if _same_origin(request):
+            return
+        supplied = request.headers.get('x-nowplaying-token', '')
+        if not config.TOKEN or secrets.compare_digest(
+            supplied.encode(), config.TOKEN.encode()
+        ):
+            return
+        origin = request.headers.get('origin') or 'absent'
+        reason = f'no Sec-Fetch-Site, Origin: {origin}'
+    client = request.client.host if request.client else 'unknown'
+    logger.warning(
+        f'[web] blocked {request.method} {request.url.path} from {client} ({reason})'
+    )
+    raise HTTPException(
+        status_code=403,
+        detail='Blocked: not same-origin and no valid X-Nowplaying-Token',
+    )
+
+
+def _same_origin(request: Request) -> bool:
+    """True when the request's `Origin` names the host it was sent to."""
+
+    origin = request.headers.get('origin')
+    if not origin or origin == 'null':
+        return False
+    return urlsplit(origin).netloc == request.headers.get('host', '')
 
 
 _THEME_META = b'<meta name="nowplaying-theme" content="">'
+_TOKEN_META = b'<meta name="nowplaying-token" content="">'
 
 
 def _themed_index(etag: str, content: bytes) -> tuple[str, bytes]:
-    """Inject the configured theme into the served HTML; cache-bust the ETag."""
-    if not THEME:
+    """Inject the configured theme and token into the served HTML."""
+
+    suffix = ''
+    if THEME:
+        meta = f'<meta name="nowplaying-theme" content="{THEME}">'.encode()
+        content = content.replace(_THEME_META, meta)
+        suffix += f'-{THEME}'
+    if config.TOKEN:
+        escaped = config.TOKEN.replace('&', '&amp;').replace('"', '&quot;')
+        meta = f'<meta name="nowplaying-token" content="{escaped}">'.encode()
+        content = content.replace(_TOKEN_META, meta)
+        suffix += f'-{hashlib.sha256(config.TOKEN.encode()).hexdigest()[:8]}'
+    if not suffix:
         return etag, content
-    meta = f'<meta name="nowplaying-theme" content="{THEME}">'.encode()
-    return f'{etag[:-1]}-{THEME}"', content.replace(_THEME_META, meta)
+    return f'{etag[:-1]}{suffix}"', content
 
 
 def _playerctl_cmd(action: str) -> list[str]:
