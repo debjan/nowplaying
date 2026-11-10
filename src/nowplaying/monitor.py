@@ -622,7 +622,10 @@ def artist_biography(artist_mbid: str, mb_limiter: RateLimiter) -> str | None:
             _ALLMUSIC_LIMITER.wait()
             logger.debug(f'[allmusic] Processing artist {allmusic_url}')
             if biography := _allmusic_page_biography(_allmusic_page(allmusic_url)):
-                return biography
+                return (
+                    f"{biography}\n"
+                    f"[Read the full biography on AllMusic]({allmusic_url})"
+                )
             logger.debug(f'[allmusic] No biography in {allmusic_url}')
         except Exception as e:
             logger.warning(f'[allmusic] Biography error: {e}')
@@ -630,7 +633,12 @@ def artist_biography(artist_mbid: str, mb_limiter: RateLimiter) -> str | None:
         try:
             if wikipedia_url := _wikidata_wikipedia_url(wikidata_url):
                 logger.debug(f'[wikipedia] Processing {wikipedia_url}')
-                return _wikipedia_biography(wikipedia_url)
+                if bio := _wikipedia_biography(wikipedia_url):
+                    return (
+                        f"{bio}\n"
+                        f"[Read the full biography on Wikipedia]({wikipedia_url})"
+                    )
+                return None
         except Exception as e:
             logger.warning(f'[wikipedia] Biography error: {e}')
     return None
