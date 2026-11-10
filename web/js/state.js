@@ -13,7 +13,8 @@ export const state = {
     lastTickTs: Date.now(),
     // Whether the position counter is running (true while a track is shown),
     // whether the server already confirmed a position, and whether a player
-    // backend is reachable (gates the transport controls and progress bar).
+    // backend is reachable (gates the progress bar; the transport controls
+    // latch on once a player has been seen - see stream.js).
     progressActive: false,
     positionSynced: false,
     playerctlAvailable: false,

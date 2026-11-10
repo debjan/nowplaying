@@ -45,6 +45,8 @@ SCREENSHOT = ROOT_DIR / 'img' / 'screenshot.png'
 
 PLAYERCTL_ACTIONS = frozenset({'play-pause', 'next', 'previous', 'pause'})
 
+PREVIOUS_RESTART_MS = 3000
+
 # ListenBrainz "similar" dialogs: how many rows to return by default/max.
 SIMILAR_LIMIT_DEFAULT = 12
 SIMILAR_LIMIT_MAX = 50
@@ -380,19 +382,19 @@ def _themed_index(etag: str, content: bytes) -> tuple[str, bytes]:
     return f'{etag[:-1]}{suffix}"', content
 
 
-def _playerctl_cmd(action: str) -> list[str]:
+def _playerctl_cmd(action: str, *args: str) -> list[str]:
     cmd = ['playerctl']
     if config.PLAYERCTL_PLAYER:
         cmd += ['--player', config.PLAYERCTL_PLAYER]
-    return cmd + [action]
+    return cmd + [action, *args]
 
 
-async def run_playerctl(action: str) -> None:
+async def run_playerctl(action: str, *args: str) -> None:
     if config.SOURCE == 'windows':
         await windows_control.control(action)
         return
     proc = await asyncio.create_subprocess_exec(
-        *_playerctl_cmd(action),
+        *_playerctl_cmd(action, *args),
         stdout=asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.PIPE,
     )
@@ -417,6 +419,36 @@ async def _player_status() -> str | None:
     if proc.returncode != 0:
         return None
     return stdout.decode('utf-8', 'replace').strip()
+
+
+async def _player_position_ms() -> int | None:
+    """Return the active player's position in ms, or None when unavailable."""
+    if config.SOURCE == 'windows':
+        return await windows_control.get_position()
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *_playerctl_cmd('position'),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+    except FileNotFoundError:
+        return None
+    stdout, _ = await proc.communicate()
+    if proc.returncode != 0:
+        return None
+    try:
+        return round(float(stdout.decode('utf-8', 'replace').strip()) * 1000)
+    except ValueError:
+        return None
+
+
+async def _restart_track() -> None:
+    """Move the active player back to the start of the current track."""
+    if config.SOURCE == 'windows':
+        if not await windows_control.seek_start():
+            raise RuntimeError('player cannot change playback position')
+        return
+    await run_playerctl('position', '0')
 
 
 async def read_track() -> dict | None:
@@ -805,12 +837,42 @@ async def track_stream() -> StreamingResponse:
     )
 
 
+async def _push_status() -> None:
+    """Publish the player status right away (after a transport command).
+
+    The stream only emits a status event when the value changes, so an
+    optimistic client toggle would otherwise stay wrong when the command was a
+    no-op (e.g. no active session). Pushing here reconciles it immediately.
+    """
+
+    global _last_status_event
+    try:
+        status = await _player_status()
+    except (OSError, RuntimeError):
+        status = None
+    _last_status_event = 'event: status\ndata: ' + json.dumps({'Status': status}) + '\n\n'
+    _publish(_last_status_event)
+
+
 @app.post('/api/player/{action}', dependencies=[Depends(require_trusted)])
 async def player_control(action: str) -> dict:
     if action not in PLAYERCTL_ACTIONS:
         raise HTTPException(status_code=400, detail=f'Invalid action: {action}')
     try:
-        await run_playerctl(action)
+        position = await _player_position_ms() if action == 'previous' else None
+        if position is not None and position > PREVIOUS_RESTART_MS:
+            # Past the intro of the current track: restart it rather than let a
+            # raw `Previous` run off the start of the playlist (which stops
+            # playback for many players).
+            try:
+                await _restart_track()
+            except RuntimeError:
+                # Player can't seek (no MPRIS SetPosition): from >3s in a raw
+                # `previous` restarts the track instead of losing the action.
+                await run_playerctl('previous')
+        else:
+            await run_playerctl(action)
+        await _push_status()
     except FileNotFoundError:
         raise HTTPException(status_code=500, detail='playerctl not installed') from None
     except RuntimeError as exc:

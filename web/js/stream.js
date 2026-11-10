@@ -28,6 +28,10 @@ let currentMbid = null;
 let similarActive = false;
 let similarProbedId = null;
 let similarCheckSeq = 0;
+// A player that stops at the start of a playlist may drop its MPRIS name, so
+// the status event turns null and would hide the transport. Once a player has
+// been reachable, keep the controls on screen: they are the user's way back.
+let sawPlayer = false;
 
 window.addEventListener('DOMContentLoaded', () => {
     const trackEl = document.getElementById('track');
@@ -233,9 +237,10 @@ window.addEventListener('DOMContentLoaded', () => {
             return;
         }
         const active = typeof data.Status === 'string';
+        if (active) sawPlayer = true;
         playBtn.classList.toggle('playing', data.Status === 'Playing');
         state.playerctlAvailable = active;
-        controls.hidden = !active;
+        controls.hidden = !sawPlayer;
         setMediaSessionState(
             data.Status === 'Playing' ? 'playing' : active ? 'paused' : 'none'
         );
