@@ -420,8 +420,13 @@ def critiquebrainz_review(release_group_id: str) -> str | None:
         )
         response.raise_for_status()
         if reviews := response.json().get('reviews'):
-            logger.debug(f"[critiquebrainz] {reviews[0]['text']}")
-            return reviews[0]['text']
+            review = reviews[0]
+            logger.debug(f"[critiquebrainz] {review['text']}")
+            return (
+                f"{review['text']}\n"
+                f"[Read the full review on CritiqueBrainz]"
+                f"(https://critiquebrainz.org/review/{review['id']})"
+            )
     except Exception as e:
         logger.warning(f'[critiquebrainz] Error: {e}')
 
@@ -476,7 +481,7 @@ def allmusic_review(release_group_id: str, mb_limiter: RateLimiter) -> str | Non
         _ALLMUSIC_LIMITER.wait()
         logger.debug(f'[allmusic] Processing {resource[0]}')
         if review := _allmusic_page_review(_allmusic_page(resource[0])):
-            return review
+            return f"{review}\n[Read the full review on AllMusic]({resource[0]})"
         logger.debug(f'[allmusic] No review in {resource[0]}')
     except Exception as e:
         logger.warning(f'[allmusic] Error: {e}')
