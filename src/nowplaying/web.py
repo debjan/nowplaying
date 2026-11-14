@@ -201,10 +201,11 @@ def _adaptive_palette(name: str) -> dict[str, str]:
     }
 
 
-def _adaptive_css_text(palette: dict[str, str]) -> bytes:
+def _adaptive_css_text(palette: dict[str, str], scheme: str) -> bytes:
     """Serialize a palette in the same shape as the static theme files."""
     text = (
         ':root {\n'
+        f'  color-scheme: {scheme};\n'
         f"  --foreground: {palette['foreground']};\n"
         f"  --background: {palette['background']};\n"
         f"  --shadow: {palette['shadow']};\n"
@@ -245,7 +246,8 @@ async def _adaptive_palette_cached(name: str) -> dict[str, str]:
 async def _adaptive_asset(name: str) -> tuple[str, bytes]:
     """`(etag, bytes)` for a generated adaptive theme."""
     palette = await _adaptive_palette_cached(name)
-    content = _adaptive_css_text(palette)
+    scheme = 'light' if name == 'adaptive-light.css' else 'dark'
+    content = _adaptive_css_text(palette, scheme)
     etag = f'"adp-{name[:-4]}-{hashlib.sha1(content).hexdigest()[:12]}"'
     return etag, content
 
@@ -362,10 +364,11 @@ def _same_origin(request: Request) -> bool:
 
 _THEME_META = b'<meta name="nowplaying-theme" content="">'
 _TOKEN_META = b'<meta name="nowplaying-token" content="">'
+_MEDIA_SESSION_META = b'<meta name="nowplaying-media-session" content="">'
 
 
 def _themed_index(etag: str, content: bytes) -> tuple[str, bytes]:
-    """Inject the configured theme and token into the served HTML."""
+    """Inject the configured theme, token and media-session flag into the served HTML."""
 
     suffix = ''
     if THEME:
@@ -377,6 +380,10 @@ def _themed_index(etag: str, content: bytes) -> tuple[str, bytes]:
         meta = f'<meta name="nowplaying-token" content="{escaped}">'.encode()
         content = content.replace(_TOKEN_META, meta)
         suffix += f'-{hashlib.sha256(config.TOKEN.encode()).hexdigest()[:8]}'
+    if not config.MEDIA_SESSION:
+        meta = b'<meta name="nowplaying-media-session" content="0">'
+        content = content.replace(_MEDIA_SESSION_META, meta)
+        suffix += '-noms'
     if not suffix:
         return etag, content
     return f'{etag[:-1]}{suffix}"', content

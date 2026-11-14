@@ -35,6 +35,10 @@ document.querySelectorAll('.btn').forEach((btn) => {
 });
 
 const mediaSession = 'mediaSession' in navigator ? navigator.mediaSession : null;
+// Guard: the server can disable the browser Media Session API via env var.
+const mediaSessionEnabled =
+    mediaSession !== null &&
+    document.querySelector('meta[name="nowplaying-media-session"]')?.content !== '0';
 // The silent keep-alive element (see `keepSessionAlive` further down).
 const sessionAudio = document.getElementById('session-audio');
 // Chromium only accepts raster artwork for the session, so the SVG
@@ -56,7 +60,7 @@ function absoluteUrl(url) {
 }
 
 export function setMediaSessionState(playbackState) {
-    if (!mediaSession) return;
+    if (!mediaSessionEnabled) return;
     try {
         mediaSession.playbackState = playbackState;
     } catch {
@@ -74,7 +78,7 @@ export function setMediaSessionState(playbackState) {
 }
 
 export function updateMediaSession(data) {
-    if (!mediaSession || !data) return;
+    if (!mediaSessionEnabled || !data) return;
     const key = JSON.stringify([data.Title, data.Artist, data.Album, data['Album Art']]);
     if (key === mediaSessionKey) return;
     mediaSessionKey = key;
@@ -92,7 +96,7 @@ export function updateMediaSession(data) {
 }
 
 export function clearMediaSession() {
-    if (!mediaSession) return;
+    if (!mediaSessionEnabled) return;
     mediaSessionKey = null;
     mediaSession.metadata = null;
     try {
@@ -106,7 +110,7 @@ export function clearMediaSession() {
 // Feed the OS scrubber; the browser rejects a state without a positive
 // duration, so this only runs once a duration is known.
 export function syncMediaSessionPosition() {
-    if (!mediaSession) return;
+    if (!mediaSessionEnabled) return;
     try {
         mediaSession.setPositionState({
             duration: state.durationMs / 1000,
@@ -118,7 +122,7 @@ export function syncMediaSessionPosition() {
     }
 }
 
-if (mediaSession) {
+if (mediaSessionEnabled) {
     const actions = {
         // `play`/`pause` are the OS asking for a specific direction; the
         // player only exposes a toggle, so no-op when already there.
@@ -198,3 +202,7 @@ window.addEventListener('focus', keepSessionAlive);
 document.addEventListener('visibilitychange', () => {
     if (!document.hidden) keepSessionAlive();
 });
+
+if (!mediaSessionEnabled) {
+    sessionAudio.remove();
+}

@@ -1,6 +1,7 @@
 /* Adaptive Light — palette is generated from the current album cover
    (see web.py _adaptive_palette). This file is the no-cover fallback. */
 :root {
+  color-scheme: light;
   --foreground: #2A2A2A;
   --background: #F2F2F2;
   --shadow: #CFCFCF;

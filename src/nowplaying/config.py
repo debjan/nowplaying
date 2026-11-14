@@ -23,6 +23,8 @@ over on first run so history isn't orphaned:
     AUTOSKIP           auto-skip hated tracks (default on; AUTOSKIP=0 disables)
     THEME              UI theme file from web/themes, e.g. `tokio-night` or `tokio-night.css`
                        (default empty = adaptive dark/light following the OS scheme)
+    MEDIA_SESSION      expose playback metadata and controls via the browser Media Session API
+                       (default on; MEDIA_SESSION=0 disables, hiding the OS media card/key integration)
     LISTENBRAINZ_USER_AGENT  contact User-Agent for the ListenBrainz API
     LISTENBRAINZ_TOKEN  ListenBrainz user token; enables listen submission
     LISTENBRAINZ_SUBMIT  set 0 to disable submission even with a token
@@ -217,6 +219,7 @@ TOKEN = get_env('NOWPLAYING_TOKEN', '').strip()
 # On by default; an old .env's SKIP_FOREVER still controls it when set.
 AUTOSKIP = _flag('AUTOSKIP', default=_flag('SKIP_FOREVER', default=True))
 THEME = get_env('THEME', '').strip().lower().removesuffix('.css')
+MEDIA_SESSION = _flag('MEDIA_SESSION', default=True)
 DEBUG = get_env('NOWPLAYING_DEBUG', '').strip().lower() in ('1', 'true', 'yes', 'on')
 PORT = _port()
 PLAYERCTL_PLAYER = get_env('PLAYERCTL_PLAYER')

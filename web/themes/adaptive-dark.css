@@ -1,6 +1,7 @@
 /* Adaptive Dark — palette is generated from the current album cover
    (see web.py _adaptive_palette). This file is the no-cover fallback. */
 :root {
+  color-scheme: dark;
   --foreground: #DCDCDC;
   --background: #141414;
   --shadow: #242424;

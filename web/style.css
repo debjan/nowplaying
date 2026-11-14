@@ -5,6 +5,7 @@
     --background-color: var(--background, #1D2021);
     --shadow-color: var(--shadow, #3C3836);
     --accent-color: var(--accent, #B8BB26);
+    scrollbar-color: var(--shadow-color) transparent;
 }
 
 /* Base / Reset */
